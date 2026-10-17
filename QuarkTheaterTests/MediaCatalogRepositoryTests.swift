@@ -40,7 +40,9 @@ final class MediaCatalogRepositoryTests: XCTestCase {
         let file = CloudFile(fileId: "video-1", parentId: "folder-1", name: "Dune.2021.mp4",
             size: 100, fileExtension: "mp4", modifiedAt: Date(timeIntervalSince1970: 10), isDirectory: false)
         let candidate = ScannedMediaCandidate(file: file,
-            parsedName: ParsedMediaName(title: "Dune", year: 2021, mediaType: .movie, seasonNumber: nil, episodeNumber: nil))
+            parsedName: ParsedMediaName(title: "Dune", year: 2021, mediaType: .movie, seasonNumber: nil,
+                                        episodeNumber: nil, inferredFromParent: false),
+            parentFolderName: nil, ancestorFolderName: nil)
         XCTAssertEqual(try repo.reconcileScan(accountID: "account-a", candidates: [candidate]),
                        MediaScanDiff(added: 1, changed: 0, removed: 0))
         XCTAssertEqual(try repo.reconcileScan(accountID: "account-a", candidates: [candidate]),
@@ -50,7 +52,8 @@ final class MediaCatalogRepositoryTests: XCTestCase {
         try repo.confirm(matched, accountID: "account-a")
         let updatedFile = CloudFile(fileId: "video-1", parentId: "folder-1", name: "Dune.2021.mp4",
             size: 200, fileExtension: "mp4", modifiedAt: Date(timeIntervalSince1970: 10), isDirectory: false)
-        let updated = ScannedMediaCandidate(file: updatedFile, parsedName: candidate.parsedName)
+        let updated = ScannedMediaCandidate(file: updatedFile, parsedName: candidate.parsedName,
+                                            parentFolderName: nil, ancestorFolderName: nil)
         XCTAssertEqual(try repo.reconcileScan(accountID: "account-a", candidates: [updated]),
                        MediaScanDiff(added: 0, changed: 1, removed: 0))
         XCTAssertTrue(try repo.confirmed(accountID: "account-a").isEmpty)
