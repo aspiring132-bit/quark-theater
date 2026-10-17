@@ -198,7 +198,7 @@ struct TMDBMatchScreen: View {
         errorMessage = nil
         defer { loading = false }
         do {
-            let parsed = ParsedMediaName(title: cleanQuery, year: nil, mediaType: selectedMediaType, seasonNumber: nil, episodeNumber: nil)
+            let parsed = ParsedMediaName(title: cleanQuery, year: nil, mediaType: selectedMediaType, seasonNumber: nil, episodeNumber: nil, inferredFromParent: false)
             let token = tokenStore.effectiveToken()
             let raw = try await TMDBService().search(parsed, apiReadToken: token, language: scraperLanguage)
             results = MediaMatchScorer.rank(raw, for: parsed)

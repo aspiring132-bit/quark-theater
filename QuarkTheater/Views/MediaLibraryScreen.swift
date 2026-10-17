@@ -635,7 +635,12 @@ struct MediaLibraryScreen: View {
 
             do {
                 let token = tokenStore.effectiveToken()
-                let raw = try await TMDBService().search(first.parsedName, apiReadToken: token, language: scraperLanguage)
+                let raw = try await TMDBService().search(
+                    first.parsedName,
+                    apiReadToken: token,
+                    language: scraperLanguage,
+                    parentFolderName: first.parentFolderName
+                )
                 let ranked = MediaMatchScorer.rank(raw, for: first.parsedName)
 
                 if let best = ranked.first, best.confidence >= 0.58 {

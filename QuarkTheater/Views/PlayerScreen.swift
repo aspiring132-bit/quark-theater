@@ -9,7 +9,11 @@ struct PlayerScreen: View {
     @State private var showDrawer = false
     @State private var showHintPill = true
     @State private var selectedDrawerTab: DrawerTab = .episodes
-    @FocusState private var isDrawerFocused: Bool
+
+    // Two-tier focus: which row is focused (tab bar vs content row)
+    @FocusState private var focusZone: FocusZone?
+
+    private enum FocusZone: Hashable { case tabBar, content }
 
     private enum DrawerTab: String, CaseIterable, Identifiable {
         case episodes = "选集列表"
@@ -71,17 +75,14 @@ struct PlayerScreen: View {
                 }
             }
 
-            // 2. Bottom Drawer Trigger Pill (shown when drawer is closed and video is loaded, auto fades after 3s)
+            // 2. Bottom Drawer Trigger Pill (auto fades after 3s)
             if !showDrawer && coordinator.player != nil && showHintPill {
                 Button {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                        showDrawer = true
-                        showHintPill = false
-                    }
+                    openDrawer()
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "chevron.up.circle.fill")
-                        Text("按 ▼ 或点击打开选集 / 音轨 / 字幕")
+                        Text("按 ▼ 打开选集 / 字幕 / 音轨")
                             .font(.headline)
                         if coordinator.canPlayNext {
                             Text("· 可直接下一集")
@@ -100,130 +101,198 @@ struct PlayerScreen: View {
 
             // 3. Sliding Bottom Control Drawer
             if showDrawer {
-                VStack(spacing: 20) {
-                    // Drawer Header
-                    HStack(alignment: .center, spacing: 24) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(coordinator.currentPlayingFile.name)
-                                .font(.title3.bold())
-                                .lineLimit(1)
-                            Text("播放清单共 \(coordinator.playlistQueue.count) 集 · 字幕 \(coordinator.subtitleOptions.count) 轨 · 音频 \(coordinator.audioOptions.count) 轨")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Picker("类别", selection: $selectedDrawerTab) {
-                            ForEach(DrawerTab.allCases) { tab in
-                                Text(tab.rawValue).tag(tab)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(maxWidth: 500)
-
-                        Button {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                showDrawer = false
-                            }
-                        } label: {
-                            Label("收起", systemImage: "chevron.down.circle.fill")
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .padding(.horizontal, 16)
-
-                    Divider()
-
-                    // Tab Content
-                    Group {
-                        switch selectedDrawerTab {
-                        case .episodes:
-                            episodesView
-                        case .subtitles:
-                            subtitlesView
-                        case .audio:
-                            audioView
-                        }
-                    }
-                    .frame(minHeight: 180)
-                }
-                .padding(32)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                )
-                .padding(.horizontal, 40)
-                .padding(.bottom, 24)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .focused($isDrawerFocused)
+                drawerPanel
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .task {
             await coordinator.start()
-            // Auto-dismiss the hint pill after 3 seconds as requested
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            withAnimation(.easeOut(duration: 0.6)) {
-                showHintPill = false
-            }
+            withAnimation(.easeOut(duration: 0.6)) { showHintPill = false }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { coordinator.saveProgress() }
         }
         .onDisappear { coordinator.stop() }
         .onMoveCommand { direction in
-            if direction == .down && !showDrawer {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    showDrawer = true
-                    showHintPill = false
-                }
-            } else if direction == .up && showDrawer {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    showDrawer = false
-                }
-            }
+            handleMoveCommand(direction)
         }
     }
 
-    // MARK: - Episodes Drawer View
+    // MARK: - Remote Navigation Handler
+    private func handleMoveCommand(_ direction: MoveCommandDirection) {
+        switch direction {
+        case .down:
+            if !showDrawer {
+                openDrawer()
+            } else if focusZone == .tabBar {
+                // Move focus from tab bar down into content area
+                focusZone = .content
+            }
+        case .up:
+            if showDrawer {
+                if focusZone == .content {
+                    // Move focus back up to tab bar
+                    focusZone = .tabBar
+                } else {
+                    // Already on tab bar — close drawer
+                    closeDrawer()
+                }
+            }
+        default:
+            break // Left/Right handled natively by focused buttons in each row
+        }
+    }
+
+    private func openDrawer() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            showDrawer = true
+            showHintPill = false
+        }
+        // Give a brief moment for views to appear, then set focus
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            focusZone = .tabBar
+        }
+    }
+
+    private func closeDrawer() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            showDrawer = false
+        }
+        focusZone = nil
+    }
+
+    // MARK: - Drawer Panel
+    @ViewBuilder
+    private var drawerPanel: some View {
+        VStack(spacing: 0) {
+            // ── Tab Bar Row ─────────────────────────────────────────────
+            // Each tab is an individually focusable Button so that L/R
+            // on the remote cycles through 选集列表 / 字幕 / 音轨 / 收起.
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(coordinator.currentPlayingFile.name)
+                        .font(.title3.bold())
+                        .lineLimit(1)
+                    Text("共 \(coordinator.playlistQueue.count) 集 · 字幕 \(coordinator.subtitleOptions.count) 轨 · 音频 \(coordinator.audioOptions.count) 轨")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                // Tab selector buttons — focusable individually
+                HStack(spacing: 8) {
+                    ForEach(DrawerTab.allCases) { tab in
+                        tabButton(tab)
+                    }
+                    // Close / collapse button in same row
+                    Button {
+                        closeDrawer()
+                    } label: {
+                        Label("收起", systemImage: "chevron.down.circle.fill")
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.bordered)
+                    .focused($focusZone, equals: .tabBar)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+
+            Divider()
+                .padding(.horizontal, 24)
+
+            // ── Content Row ─────────────────────────────────────────────
+            Group {
+                switch selectedDrawerTab {
+                case .episodes: episodesView
+                case .subtitles: subtitlesView
+                case .audio: audioView
+                }
+            }
+            .frame(minHeight: 180)
+            .padding(.top, 4)
+        }
+        .padding(.bottom, 28)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
+        .overlay(
+            RoundedRectangle(cornerRadius: 28)
+                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+        )
+        .padding(.horizontal, 40)
+        .padding(.bottom, 24)
+    }
+
+    // MARK: - Tab Button
+    @ViewBuilder
+    private func tabButton(_ tab: DrawerTab) -> some View {
+        let isSelected = selectedDrawerTab == tab
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                selectedDrawerTab = tab
+            }
+            // Move focus to content so the user can immediately navigate items
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                focusZone = .content
+            }
+        } label: {
+            Text(tab.rawValue)
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(isSelected ? Color.cyan.opacity(0.25) : Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(isSelected ? Color.cyan : Color.clear, lineWidth: 1.5)
+                )
+        }
+        .buttonStyle(.borderless)
+        // All tab buttons share the same FocusZone (.tabBar) — tvOS focus
+        // engine navigates horizontally between siblings in the same HStack.
+        .focused($focusZone, equals: .tabBar)
+    }
+
+    // MARK: - Episodes Content Row
     @ViewBuilder
     private var episodesView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 if coordinator.canPlayNext {
                     Button {
                         coordinator.playNext()
+                        closeDrawer()
                     } label: {
                         VStack(spacing: 8) {
                             Image(systemName: "forward.end.fill")
-                                .font(.system(size: 32))
+                                .font(.system(size: 28))
                                 .foregroundStyle(.cyan)
-                            Text("直接播放下一集")
+                            Text("下一集")
                                 .font(.headline)
-                            Text("快速跳集")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
-                        .padding(.vertical, 20)
-                        .padding(.horizontal, 28)
-                        .frame(width: 220, height: 140)
+                        .padding(.vertical, 18)
+                        .padding(.horizontal, 24)
+                        .frame(width: 180, height: 120)
                         .background(Color.cyan.opacity(0.18))
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16)
+                            RoundedRectangle(cornerRadius: 14)
                                 .stroke(Color.cyan, lineWidth: 2)
                         )
                     }
                     .buttonStyle(.borderless)
+                    .focused($focusZone, equals: .content)
                 }
 
                 ForEach(coordinator.playlistQueue) { file in
                     let isCurrent = file.fileId == coordinator.currentPlayingFile.fileId
                     Button {
                         coordinator.playFile(file)
+                        closeDrawer()
                     } label: {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 6) {
                             HStack {
                                 if isCurrent {
                                     Label("播放中", systemImage: "play.circle.fill")
@@ -247,48 +316,43 @@ struct PlayerScreen: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(16)
-                        .frame(width: 260, height: 140)
+                        .padding(14)
+                        .frame(width: 240, height: 120)
                         .background(isCurrent ? Color.cyan.opacity(0.12) : Color.white.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(isCurrent ? Color.cyan : Color.white.opacity(0.1), lineWidth: isCurrent ? 2 : 1)
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(isCurrent ? Color.cyan : Color.white.opacity(0.1),
+                                        lineWidth: isCurrent ? 2 : 1)
                         )
                     }
                     .buttonStyle(.borderless)
+                    .focused($focusZone, equals: .content)
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
         }
     }
 
-    // MARK: - Subtitles Drawer View
+    // MARK: - Subtitles Content Row
     @ViewBuilder
     private var subtitlesView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 20) {
-                // Option: Off
+            HStack(spacing: 16) {
                 let isOff = coordinator.selectedSubtitleIndex == nil
                 Button {
                     coordinator.selectSubtitle(nil)
                 } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: isOff ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(isOff ? .cyan : .secondary)
-                        Text("关闭字幕")
-                            .font(.headline)
-                    }
-                    .padding(20)
-                    .frame(width: 200, height: 100)
-                    .background(isOff ? Color.cyan.opacity(0.15) : Color.white.opacity(0.06))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(isOff ? Color.cyan : Color.white.opacity(0.1), lineWidth: isOff ? 2 : 1)
+                    subtitleAudioLabel(
+                        icon: isOff ? "checkmark.circle.fill" : "circle",
+                        title: "关闭字幕",
+                        subtitle: "关",
+                        isSelected: isOff
                     )
                 }
                 .buttonStyle(.borderless)
+                .focused($focusZone, equals: .content)
 
                 if coordinator.subtitleOptions.isEmpty {
                     Text("未检测到内嵌字幕轨，支持外挂 SRT/ASS 格式。")
@@ -301,39 +365,28 @@ struct PlayerScreen: View {
                         Button {
                             coordinator.selectSubtitle(index)
                         } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(isSelected ? .cyan : .secondary)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(option.displayName)
-                                        .font(.headline)
-                                    Text("字幕轨 #\(index + 1)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(20)
-                            .frame(width: 240, height: 100)
-                            .background(isSelected ? Color.cyan.opacity(0.15) : Color.white.opacity(0.06))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(isSelected ? Color.cyan : Color.white.opacity(0.1), lineWidth: isSelected ? 2 : 1)
+                            subtitleAudioLabel(
+                                icon: isSelected ? "checkmark.circle.fill" : "circle",
+                                title: option.displayName,
+                                subtitle: "字幕轨 #\(index + 1)",
+                                isSelected: isSelected
                             )
                         }
                         .buttonStyle(.borderless)
+                        .focused($focusZone, equals: .content)
                     }
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
         }
     }
 
-    // MARK: - Audio Drawer View
+    // MARK: - Audio Content Row
     @ViewBuilder
     private var audioView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 if coordinator.audioOptions.isEmpty {
                     Text("当前使用系统默认立体声音频流。")
                         .foregroundStyle(.secondary)
@@ -345,32 +398,46 @@ struct PlayerScreen: View {
                         Button {
                             coordinator.selectAudio(index)
                         } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: isSelected ? "speaker.wave.3.fill" : "speaker.wave.1")
-                                    .font(.title2)
-                                    .foregroundStyle(isSelected ? .cyan : .secondary)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(option.displayName)
-                                        .font(.headline)
-                                    Text("音轨 #\(index + 1)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(20)
-                            .frame(width: 240, height: 100)
-                            .background(isSelected ? Color.cyan.opacity(0.15) : Color.white.opacity(0.06))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(isSelected ? Color.cyan : Color.white.opacity(0.1), lineWidth: isSelected ? 2 : 1)
+                            subtitleAudioLabel(
+                                icon: isSelected ? "speaker.wave.3.fill" : "speaker.wave.1",
+                                title: option.displayName,
+                                subtitle: "音轨 #\(index + 1)",
+                                isSelected: isSelected
                             )
                         }
                         .buttonStyle(.borderless)
+                        .focused($focusZone, equals: .content)
                     }
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
         }
+    }
+
+    // MARK: - Shared Item Label
+    @ViewBuilder
+    private func subtitleAudioLabel(icon: String, title: String, subtitle: String, isSelected: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(isSelected ? .cyan : .secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 200, minHeight: 90)
+        .background(isSelected ? Color.cyan.opacity(0.15) : Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(isSelected ? Color.cyan : Color.white.opacity(0.1),
+                        lineWidth: isSelected ? 2 : 1)
+        )
     }
 }
