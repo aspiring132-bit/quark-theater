@@ -1,128 +1,578 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {};
+	classes = {
+	};
 	objectVersion = 56;
 	objects = {
-		024BCF0283214E898A5FA442 = { isa = XCBuildConfiguration; buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = "YES"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "org.quarktheater.app.tests"; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/QuarkTheater.app/QuarkTheater"; }; name = Release; };
-		0DB0FB335F7E3B983CFBF482 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MediaLibraryScannerTests.swift"; sourceTree = "<group>"; };
-		0E67DDB24008359A3BF8F1AB = { isa = XCBuildConfiguration; buildSettings = { GENERATE_INFOPLIST_FILE = "YES"; INFOPLIST_KEY_CFBundleDisplayName = "Quark Theater"; INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = "NO"; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "org.quarktheater.app"; PRODUCT_MODULE_NAME = "QuarkTheater"; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = "YES"; }; name = Debug; };
-		0F696255E4B49ABD434A33E0 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BoundFolderStore.swift"; sourceTree = "<group>"; };
-		0FEDE2A2D2565E0B64C9E468 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FileBrowserViewModel.swift"; sourceTree = "<group>"; };
-		105327C26B7DFA5BF2796FA4 = { isa = PBXGroup; children = (2AF96DE1A05E81AF83C977E1, 139B768255CDD2449F869974, 6609DFF3A36EA4D2A4606311, E453843142DA15D704B4D644, 2BDA20DF9EE1923417C709AC, 3A71F687ECB005A130365F10, E93844620171DE94EE40ACB8, F6D48B5DB14D5FA13CF6F270, 85CA77BD11267D20E50DD7BB,); path = "Views"; sourceTree = "<group>"; };
-		139B768255CDD2449F869974 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FolderSelectionScreen.swift"; sourceTree = "<group>"; };
-		13D58F750C9F7A867F986420 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (6E83E47E070F02EAC722AC34,); runOnlyForDeploymentPostprocessing = 0; };
-		15BB6E66F5DC9F93E4B8D724 = { isa = PBXBuildFile; fileRef = 0FEDE2A2D2565E0B64C9E468; };
-		17A2104B46D28F9CA7CF0157 = { isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		19E4CC515A985B4F96EB86EF = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LiveQuarkClient.swift"; sourceTree = "<group>"; };
-		1B3039B2E15DD2AB7EA6156D = { isa = PBXGroup; children = (3189F23FC9C1B90C18E3BB95,); path = Config; sourceTree = "<group>"; };
-		2092A43DB459EB657A4AD77C = { isa = PBXBuildFile; fileRef = B7C568177225672C32585B8F; };
-		2188C97F1B89AE85233E34D5 = { isa = PBXBuildFile; fileRef = 5202E60359CEB22613A9D519; };
-		244210E48437B6556980A702 = { isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = { 8C1A045E96B998B40533C7FF = { CreatedOnToolsVersion = 16.0; }; B70E7FC58E5219C3FB7E302C = { CreatedOnToolsVersion = 16.0; TestTargetID = 8C1A045E96B998B40533C7FF; }; }; }; buildConfigurationList = B3CCCC363E44FDBA595AB584; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh-Hans; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base); mainGroup = 60EB5AC69302A5F5CE60854D; productRefGroup = AE7805B56D1DCAFAA071416F; projectDirPath = ""; projectRoot = ""; targets = (8C1A045E96B998B40533C7FF, B70E7FC58E5219C3FB7E302C,); };
-		25427E45FEF28F36D956681F = { isa = PBXBuildFile; fileRef = 295DE2A186B120AAE91EFD8C; };
-		28561753C61072167E7822C2 = { isa = PBXBuildFile; fileRef = 5E70E4681746B80FCC39A9FA; };
-		295DE2A186B120AAE91EFD8C = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FilenameParser.swift"; sourceTree = "<group>"; };
-		2AF96DE1A05E81AF83C977E1 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FileBrowserScreen.swift"; sourceTree = "<group>"; };
-		2B61177A17B6824CE8CE212F = { isa = PBXBuildFile; fileRef = 45E3ECD77F63FD7BBC1E9F1A; };
-		2BDA20DF9EE1923417C709AC = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MediaItemDetailScreen.swift"; sourceTree = "<group>"; };
-		2D3B98EC3B7AF941899F927C = { isa = PBXBuildFile; fileRef = 5FA0D4EECE951E1E0850B332; };
-		2DDE4CE03BC7EC72D5581116 = { isa = PBXBuildFile; fileRef = C36DF349758371BC6C310809; };
-		2E14895F3F6F1661C8D72E94 = { isa = PBXBuildFile; fileRef = 6FEB3531C2F654FE66B5EB70; };
-		2E6CFF08591931473A4123FB = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CoreModelsTests.swift"; sourceTree = "<group>"; };
-		3189F23FC9C1B90C18E3BB95 = { isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
-		31F21A95550F57CE4D6ED4FB = { isa = PBXGroup; children = (2E6CFF08591931473A4123FB, 5E70E4681746B80FCC39A9FA, 5202E60359CEB22613A9D519, 904A50D3DCD129C075EAF22C, 0DB0FB335F7E3B983CFBF482, C8BF4E66509E0FA94B62AFCF, 3F0BEDDCF2BD7DB975CF859B, F882913339941443DCEB5868, C36DF349758371BC6C310809,); path = "QuarkTheaterTests"; sourceTree = "<group>"; };
-		3498385FE8E1CE1F8DFD4D32 = { isa = PBXFileReference; lastKnownFileType = sourcecode.text-based-dylib-definition; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
-		36BB14A00AA9E00489F8147D = { isa = PBXGroup; children = (6FEB3531C2F654FE66B5EB70, 372545E5D92D8FE3832203DC,); path = "Repositories"; sourceTree = "<group>"; };
-		372545E5D92D8FE3832203DC = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MediaCatalogRepository.swift"; sourceTree = "<group>"; };
-		382032EF1D1CAD7DCFE6B874 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CredentialStore.swift"; sourceTree = "<group>"; };
-		3A71F687ECB005A130365F10 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MediaLibraryScreen.swift"; sourceTree = "<group>"; };
-		3C3E84839B99B59B50C6F000 = { isa = PBXGroup; children = (3498385FE8E1CE1F8DFD4D32,); name = Frameworks; sourceTree = "<group>"; };
-		3E9C14F227D23D5430074308 = { isa = PBXGroup; children = (B7C568177225672C32585B8F,); path = "App"; sourceTree = "<group>"; };
-		3F0BEDDCF2BD7DB975CF859B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlaybackProbeCookieTests.swift"; sourceTree = "<group>"; };
-		436685F4CA30A3E16F8A43F3 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MockQuarkClient.swift"; sourceTree = "<group>"; };
-		43C8F7B1A3316A5B41358B2F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TMDBCredentialStore.swift"; sourceTree = "<group>"; };
-		44EF1C6DFC507E9E10927513 = { isa = PBXBuildFile; fileRef = 904A50D3DCD129C075EAF22C; };
-		45E3ECD77F63FD7BBC1E9F1A = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MediaMatchScorer.swift"; sourceTree = "<group>"; };
-		479709A1CF8E9F6A97C0FDFE = { isa = PBXBuildFile; fileRef = 17A2104B46D28F9CA7CF0157; };
-		507FF8333924AF0F32FE00E6 = { isa = PBXBuildFile; fileRef = 7BC6AADE8DEF8DEECAF5FB1B; };
-		5202E60359CEB22613A9D519 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HistoryRepositoryTests.swift"; sourceTree = "<group>"; };
-		556946F9B16BB95A050AB2FF = { isa = PBXBuildFile; fileRef = 3A71F687ECB005A130365F10; };
-		5C453EB7906090F0A1CBB897 = { isa = PBXBuildFile; fileRef = 436685F4CA30A3E16F8A43F3; };
-		5E70E4681746B80FCC39A9FA = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FilenameParserTests.swift"; sourceTree = "<group>"; };
-		5FA0D4EECE951E1E0850B332 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "QuarkClient.swift"; sourceTree = "<group>"; };
-		60EB5AC69302A5F5CE60854D = { isa = PBXGroup; children = (68F1890D6194E94B80DEB289, 31F21A95550F57CE4D6ED4FB, 1B3039B2E15DD2AB7EA6156D, 3C3E84839B99B59B50C6F000, AE7805B56D1DCAFAA071416F,); sourceTree = "<group>"; };
-		61720512F863BF6DF7293BE0 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MediaLibraryScanner.swift"; sourceTree = "<group>"; };
-		63661B878443CA12B23661C3 = { isa = PBXBuildFile; fileRef = C8BF4E66509E0FA94B62AFCF; };
-		64321F40F98F9F79FEC83C37 = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuarkTheaterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		64A6AD2A1D21599D512A15FE = { isa = PBXBuildFile; fileRef = 6609DFF3A36EA4D2A4606311; };
-		65C6F64AAF575DB1ACED7604 = { isa = XCBuildConfiguration; baseConfigurationReference = 3189F23FC9C1B90C18E3BB95; buildSettings = { ALWAYS_SEARCH_USER_PATHS = "NO"; CLANG_WARN_DOCUMENTATION_COMMENTS = "YES"; CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = "YES"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_TESTABILITY = "NO"; GCC_C_LANGUAGE_STANDARD = "gnu17"; ONLY_ACTIVE_ARCH = "NO"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = ""; SWIFT_OPTIMIZATION_LEVEL = "-O"; }; name = Release; };
-		6609DFF3A36EA4D2A4606311 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HistoryScreen.swift"; sourceTree = "<group>"; };
-		68F1890D6194E94B80DEB289 = { isa = PBXGroup; children = (3E9C14F227D23D5430074308, 17A2104B46D28F9CA7CF0157, B78ABABF964C04FBB1A2F146, 819D2CC2A05D3EAA03C46CD3, B8553B95649523AFAA0AC8EE, 36BB14A00AA9E00489F8147D, 870C66AB963751828488EA18, E51D15F4241E3D68CC5CEBE5, 105327C26B7DFA5BF2796FA4,); path = "QuarkTheater"; sourceTree = "<group>"; };
-		6ACE7BC297BF23705D4E5F56 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (2092A43DB459EB657A4AD77C, 770AA89EBD543AECD0016D0F, C7854BD0A9D959DE36646AF0, 2D3B98EC3B7AF941899F927C, 25427E45FEF28F36D956681F, 9D38850D640F9893C2E5A11C, 2B61177A17B6824CE8CE212F, D11844E87E97F56A0784A922, B3945D1DABCF8F829FBE7DE5, 507FF8333924AF0F32FE00E6, DCEDBB74D814853797427866, 2E14895F3F6F1661C8D72E94, E1F5C0169153A2159319140C, FD2BEC7464142E01027D9C31, CAB8E01E9CBB33CC4B4AEF16, B515D916E9BB201AEF49252F, 5C453EB7906090F0A1CBB897, 9F2E7DF7A6EAE2D0373FA8CF, D2EC6DDE6DB3E46BBCE89CCB, 15BB6E66F5DC9F93E4B8D724, 977FA64110EE4FA16E0382D6, FD3DE98F4F8B8BCD46264657, 8482001FC4F7948E119F6502, 64A6AD2A1D21599D512A15FE, F6B4B58A3EA99B32CB0B5EE0, B4EF7D85CBF251774FA6B18B, 556946F9B16BB95A050AB2FF, 90B77B34D4C84157019471A9, EEDA47AB6927F45968838A5B, F02644E37AD77DF0B9767AB0,); runOnlyForDeploymentPostprocessing = 0; };
-		6E83E47E070F02EAC722AC34 = { isa = PBXBuildFile; fileRef = 3498385FE8E1CE1F8DFD4D32; };
-		6FEB3531C2F654FE66B5EB70 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HistoryRepository.swift"; sourceTree = "<group>"; };
-		770AA89EBD543AECD0016D0F = { isa = PBXBuildFile; fileRef = 9D731F4699BF891D0B219D53; };
-		7B5362E4FAC54A48B0391469 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "QuarkHTTPTransport.swift"; sourceTree = "<group>"; };
-		7BC6AADE8DEF8DEECAF5FB1B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlaybackProbe.swift"; sourceTree = "<group>"; };
-		819D2CC2A05D3EAA03C46CD3 = { isa = PBXGroup; children = (295DE2A186B120AAE91EFD8C, 61720512F863BF6DF7293BE0, 45E3ECD77F63FD7BBC1E9F1A, 9AEDE2898682370A4F5ADE39,); path = "Media"; sourceTree = "<group>"; };
-		81F31879437340D5CD6ED968 = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuarkTheater.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		8482001FC4F7948E119F6502 = { isa = PBXBuildFile; fileRef = 139B768255CDD2449F869974; };
-		85CA77BD11267D20E50DD7BB = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TMDBMatchScreen.swift"; sourceTree = "<group>"; };
-		85D28ABFEC3101C27B0762D5 = { isa = XCBuildConfiguration; buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = "YES"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "org.quarktheater.app.tests"; PRODUCT_NAME = "$(TARGET_NAME)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/QuarkTheater.app/QuarkTheater"; }; name = Debug; };
-		8619E39B688A33CB92F66F7B = { isa = PBXContainerItemProxy; containerPortal = 244210E48437B6556980A702; proxyType = 1; remoteGlobalIDString = 8C1A045E96B998B40533C7FF; remoteInfo = QuarkTheater; };
-		870C66AB963751828488EA18 = { isa = PBXGroup; children = (0F696255E4B49ABD434A33E0, 382032EF1D1CAD7DCFE6B874, 19E4CC515A985B4F96EB86EF, 436685F4CA30A3E16F8A43F3, 7B5362E4FAC54A48B0391469, 43C8F7B1A3316A5B41358B2F,); path = "Services"; sourceTree = "<group>"; };
-		8C1A045E96B998B40533C7FF = { isa = PBXNativeTarget; buildConfigurationList = C58ED996048F130760329D38; buildPhases = (6ACE7BC297BF23705D4E5F56, 13D58F750C9F7A867F986420, EB12F685944315C425ABFF58,); buildRules = (); dependencies = (); name = QuarkTheater; productName = QuarkTheater; productReference = 81F31879437340D5CD6ED968; productType = "com.apple.product-type.application"; };
-		904A50D3DCD129C075EAF22C = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MediaCatalogRepositoryTests.swift"; sourceTree = "<group>"; };
-		90B77B34D4C84157019471A9 = { isa = PBXBuildFile; fileRef = E93844620171DE94EE40ACB8; };
-		90F3F4EA1FF04487A9D38BC7 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Models.swift"; sourceTree = "<group>"; };
-		90FAB9E25D2C3661134FF5C9 = { isa = PBXBuildFile; fileRef = 0DB0FB335F7E3B983CFBF482; };
-		923019BD38FF97989F221A61 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A246BB79379E2B78F63A741B, 28561753C61072167E7822C2, 2188C97F1B89AE85233E34D5, 44EF1C6DFC507E9E10927513, 90FAB9E25D2C3661134FF5C9, 63661B878443CA12B23661C3, C32A1EC8591C51A98F99EE25, EC963C0D0CB109B5A7786EC5, 2DDE4CE03BC7EC72D5581116,); runOnlyForDeploymentPostprocessing = 0; };
-		93EEF436AE88283A89EC167B = { isa = PBXTargetDependency; target = 8C1A045E96B998B40533C7FF; targetProxy = 8619E39B688A33CB92F66F7B; };
-		95AA40661CB6DF07E4144EF2 = { isa = XCBuildConfiguration; baseConfigurationReference = 3189F23FC9C1B90C18E3BB95; buildSettings = { ALWAYS_SEARCH_USER_PATHS = "NO"; CLANG_WARN_DOCUMENTATION_COMMENTS = "YES"; CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = "YES"; DEBUG_INFORMATION_FORMAT = "dwarf"; ENABLE_TESTABILITY = "YES"; GCC_C_LANGUAGE_STANDARD = "gnu17"; ONLY_ACTIVE_ARCH = "YES"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
-		977FA64110EE4FA16E0382D6 = { isa = PBXBuildFile; fileRef = B80D3E6EDDCF9AB756B8C5CB; };
-		9AEDE2898682370A4F5ADE39 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TMDBService.swift"; sourceTree = "<group>"; };
-		9D38850D640F9893C2E5A11C = { isa = PBXBuildFile; fileRef = 61720512F863BF6DF7293BE0; };
-		9D731F4699BF891D0B219D53 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Diagnostics.swift"; sourceTree = "<group>"; };
-		9F2E7DF7A6EAE2D0373FA8CF = { isa = PBXBuildFile; fileRef = 7B5362E4FAC54A48B0391469; };
-		A246BB79379E2B78F63A741B = { isa = PBXBuildFile; fileRef = 2E6CFF08591931473A4123FB; };
-		AE6ABB2D5E6F7000BEB1DAD3 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RetryPolicy.swift"; sourceTree = "<group>"; };
-		AE7805B56D1DCAFAA071416F = { isa = PBXGroup; children = (81F31879437340D5CD6ED968, 64321F40F98F9F79FEC83C37,); name = Products; sourceTree = "<group>"; };
-		B3945D1DABCF8F829FBE7DE5 = { isa = PBXBuildFile; fileRef = F9D2A8C7C3A60B3889FCE0AB; };
-		B3CCCC363E44FDBA595AB584 = { isa = XCConfigurationList; buildConfigurations = (95AA40661CB6DF07E4144EF2, 65C6F64AAF575DB1ACED7604,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		B4EF7D85CBF251774FA6B18B = { isa = PBXBuildFile; fileRef = 2BDA20DF9EE1923417C709AC; };
-		B515D916E9BB201AEF49252F = { isa = PBXBuildFile; fileRef = 19E4CC515A985B4F96EB86EF; };
-		B70E7FC58E5219C3FB7E302C = { isa = PBXNativeTarget; buildConfigurationList = E39F3A6FE32E060FF5753D4A; buildPhases = (923019BD38FF97989F221A61, C4EECED6B022BF4B525F7174, E4BB408D666ACFAF1A684EC9,); buildRules = (); dependencies = (93EEF436AE88283A89EC167B,); name = QuarkTheaterTests; productName = QuarkTheaterTests; productReference = 64321F40F98F9F79FEC83C37; productType = "com.apple.product-type.bundle.unit-test"; };
-		B78ABABF964C04FBB1A2F146 = { isa = PBXGroup; children = (9D731F4699BF891D0B219D53, 90F3F4EA1FF04487A9D38BC7, 5FA0D4EECE951E1E0850B332,); path = "Core"; sourceTree = "<group>"; };
-		B7C568177225672C32585B8F = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "QuarkTheaterApp.swift"; sourceTree = "<group>"; };
-		B80D3E6EDDCF9AB756B8C5CB = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel.swift"; sourceTree = "<group>"; };
-		B8553B95649523AFAA0AC8EE = { isa = PBXGroup; children = (F9D2A8C7C3A60B3889FCE0AB, 7BC6AADE8DEF8DEECAF5FB1B, AE6ABB2D5E6F7000BEB1DAD3,); path = "Playback"; sourceTree = "<group>"; };
-		C32A1EC8591C51A98F99EE25 = { isa = PBXBuildFile; fileRef = 3F0BEDDCF2BD7DB975CF859B; };
-		C36DF349758371BC6C310809 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RetryPolicyTests.swift"; sourceTree = "<group>"; };
-		C4EECED6B022BF4B525F7174 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		C58ED996048F130760329D38 = { isa = XCConfigurationList; buildConfigurations = (0E67DDB24008359A3BF8F1AB, CCF7D3BC6FBEDAE8FA277D07,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		C7854BD0A9D959DE36646AF0 = { isa = PBXBuildFile; fileRef = 90F3F4EA1FF04487A9D38BC7; };
-		C8BF4E66509E0FA94B62AFCF = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MediaMatchScorerTests.swift"; sourceTree = "<group>"; };
-		CAB8E01E9CBB33CC4B4AEF16 = { isa = PBXBuildFile; fileRef = 382032EF1D1CAD7DCFE6B874; };
-		CCF7D3BC6FBEDAE8FA277D07 = { isa = XCBuildConfiguration; buildSettings = { GENERATE_INFOPLIST_FILE = "YES"; INFOPLIST_KEY_CFBundleDisplayName = "Quark Theater"; INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = "NO"; INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "org.quarktheater.app"; PRODUCT_MODULE_NAME = "QuarkTheater"; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = "YES"; }; name = Release; };
-		D11844E87E97F56A0784A922 = { isa = PBXBuildFile; fileRef = 9AEDE2898682370A4F5ADE39; };
-		D2EC6DDE6DB3E46BBCE89CCB = { isa = PBXBuildFile; fileRef = 43C8F7B1A3316A5B41358B2F; };
-		DCEDBB74D814853797427866 = { isa = PBXBuildFile; fileRef = AE6ABB2D5E6F7000BEB1DAD3; };
-		E1F5C0169153A2159319140C = { isa = PBXBuildFile; fileRef = 372545E5D92D8FE3832203DC; };
-		E39F3A6FE32E060FF5753D4A = { isa = XCConfigurationList; buildConfigurations = (85D28ABFEC3101C27B0762D5, 024BCF0283214E898A5FA442,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		E453843142DA15D704B4D644 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LoginScreen.swift"; sourceTree = "<group>"; };
-		E4BB408D666ACFAF1A684EC9 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		E51D15F4241E3D68CC5CEBE5 = { isa = PBXGroup; children = (0FEDE2A2D2565E0B64C9E468, B80D3E6EDDCF9AB756B8C5CB,); path = "ViewModels"; sourceTree = "<group>"; };
-		E93844620171DE94EE40ACB8 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlayerScreen.swift"; sourceTree = "<group>"; };
-		EB12F685944315C425ABFF58 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (479709A1CF8E9F6A97C0FDFE,); runOnlyForDeploymentPostprocessing = 0; };
-		EC963C0D0CB109B5A7786EC5 = { isa = PBXBuildFile; fileRef = F882913339941443DCEB5868; };
-		EEDA47AB6927F45968838A5B = { isa = PBXBuildFile; fileRef = F6D48B5DB14D5FA13CF6F270; };
-		F02644E37AD77DF0B9767AB0 = { isa = PBXBuildFile; fileRef = 85CA77BD11267D20E50DD7BB; };
-		F6B4B58A3EA99B32CB0B5EE0 = { isa = PBXBuildFile; fileRef = E453843142DA15D704B4D644; };
-		F6D48B5DB14D5FA13CF6F270 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RootView.swift"; sourceTree = "<group>"; };
-		F882913339941443DCEB5868 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "QuarkClientTests.swift"; sourceTree = "<group>"; };
-		F9D2A8C7C3A60B3889FCE0AB = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlaybackCoordinator.swift"; sourceTree = "<group>"; };
-		FD2BEC7464142E01027D9C31 = { isa = PBXBuildFile; fileRef = 0F696255E4B49ABD434A33E0; };
-		FD3DE98F4F8B8BCD46264657 = { isa = PBXBuildFile; fileRef = 2AF96DE1A05E81AF83C977E1; };
+
+/* Begin PBXBuildFile section */
+		15BB6E66F5DC9F93E4B8D724 /* FileBrowserViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FEDE2A2D2565E0B64C9E468 /* FileBrowserViewModel.swift */; };
+		2092A43DB459EB657A4AD77C /* QuarkTheaterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C568177225672C32585B8F /* QuarkTheaterApp.swift */; };
+		2188C97F1B89AE85233E34D5 /* HistoryRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5202E60359CEB22613A9D519 /* HistoryRepositoryTests.swift */; };
+		25427E45FEF28F36D956681F /* FilenameParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295DE2A186B120AAE91EFD8C /* FilenameParser.swift */; };
+		28561753C61072167E7822C2 /* FilenameParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E70E4681746B80FCC39A9FA /* FilenameParserTests.swift */; };
+		2B61177A17B6824CE8CE212F /* MediaMatchScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45E3ECD77F63FD7BBC1E9F1A /* MediaMatchScorer.swift */; };
+		2D3B98EC3B7AF941899F927C /* QuarkClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FA0D4EECE951E1E0850B332 /* QuarkClient.swift */; };
+		2DDE4CE03BC7EC72D5581116 /* RetryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C36DF349758371BC6C310809 /* RetryPolicyTests.swift */; };
+		2E14895F3F6F1661C8D72E94 /* HistoryRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FEB3531C2F654FE66B5EB70 /* HistoryRepository.swift */; };
+		44EF1C6DFC507E9E10927513 /* MediaCatalogRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 904A50D3DCD129C075EAF22C /* MediaCatalogRepositoryTests.swift */; };
+		479709A1CF8E9F6A97C0FDFE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 17A2104B46D28F9CA7CF0157 /* Assets.xcassets */; };
+		507FF8333924AF0F32FE00E6 /* PlaybackProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BC6AADE8DEF8DEECAF5FB1B /* PlaybackProbe.swift */; };
+		556946F9B16BB95A050AB2FF /* MediaLibraryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A71F687ECB005A130365F10 /* MediaLibraryScreen.swift */; };
+		5C453EB7906090F0A1CBB897 /* MockQuarkClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 436685F4CA30A3E16F8A43F3 /* MockQuarkClient.swift */; };
+		63661B878443CA12B23661C3 /* MediaMatchScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8BF4E66509E0FA94B62AFCF /* MediaMatchScorerTests.swift */; };
+		64A6AD2A1D21599D512A15FE /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6609DFF3A36EA4D2A4606311 /* HistoryScreen.swift */; };
+		6E83E47E070F02EAC722AC34 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 3498385FE8E1CE1F8DFD4D32 /* libsqlite3.tbd */; };
+		770AA89EBD543AECD0016D0F /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D731F4699BF891D0B219D53 /* Diagnostics.swift */; };
+		8482001FC4F7948E119F6502 /* FolderSelectionScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 139B768255CDD2449F869974 /* FolderSelectionScreen.swift */; };
+		90B77B34D4C84157019471A9 /* PlayerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E93844620171DE94EE40ACB8 /* PlayerScreen.swift */; };
+		90FAB9E25D2C3661134FF5C9 /* MediaLibraryScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DB0FB335F7E3B983CFBF482 /* MediaLibraryScannerTests.swift */; };
+		977FA64110EE4FA16E0382D6 /* SessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B80D3E6EDDCF9AB756B8C5CB /* SessionViewModel.swift */; };
+		9D38850D640F9893C2E5A11C /* MediaLibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61720512F863BF6DF7293BE0 /* MediaLibraryScanner.swift */; };
+		9F2E7DF7A6EAE2D0373FA8CF /* QuarkHTTPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B5362E4FAC54A48B0391469 /* QuarkHTTPTransport.swift */; };
+		A246BB79379E2B78F63A741B /* CoreModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E6CFF08591931473A4123FB /* CoreModelsTests.swift */; };
+		B3945D1DABCF8F829FBE7DE5 /* PlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D2A8C7C3A60B3889FCE0AB /* PlaybackCoordinator.swift */; };
+		B4EF7D85CBF251774FA6B18B /* MediaItemDetailScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BDA20DF9EE1923417C709AC /* MediaItemDetailScreen.swift */; };
+		B515D916E9BB201AEF49252F /* LiveQuarkClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19E4CC515A985B4F96EB86EF /* LiveQuarkClient.swift */; };
+		C32A1EC8591C51A98F99EE25 /* PlaybackProbeCookieTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F0BEDDCF2BD7DB975CF859B /* PlaybackProbeCookieTests.swift */; };
+		C7854BD0A9D959DE36646AF0 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F3F4EA1FF04487A9D38BC7 /* Models.swift */; };
+		CAB8E01E9CBB33CC4B4AEF16 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 382032EF1D1CAD7DCFE6B874 /* CredentialStore.swift */; };
+		D11844E87E97F56A0784A922 /* TMDBService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AEDE2898682370A4F5ADE39 /* TMDBService.swift */; };
+		D2EC6DDE6DB3E46BBCE89CCB /* TMDBCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C8F7B1A3316A5B41358B2F /* TMDBCredentialStore.swift */; };
+		DCEDBB74D814853797427866 /* RetryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6ABB2D5E6F7000BEB1DAD3 /* RetryPolicy.swift */; };
+		E1F5C0169153A2159319140C /* MediaCatalogRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 372545E5D92D8FE3832203DC /* MediaCatalogRepository.swift */; };
+		EC963C0D0CB109B5A7786EC5 /* QuarkClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F882913339941443DCEB5868 /* QuarkClientTests.swift */; };
+		EEDA47AB6927F45968838A5B /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6D48B5DB14D5FA13CF6F270 /* RootView.swift */; };
+		F02644E37AD77DF0B9767AB0 /* TMDBMatchScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85CA77BD11267D20E50DD7BB /* TMDBMatchScreen.swift */; };
+		F6B4B58A3EA99B32CB0B5EE0 /* LoginScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E453843142DA15D704B4D644 /* LoginScreen.swift */; };
+		FD2BEC7464142E01027D9C31 /* BoundFolderStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F696255E4B49ABD434A33E0 /* BoundFolderStore.swift */; };
+		FD3DE98F4F8B8BCD46264657 /* FileBrowserScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AF96DE1A05E81AF83C977E1 /* FileBrowserScreen.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		8619E39B688A33CB92F66F7B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 244210E48437B6556980A702 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8C1A045E96B998B40533C7FF;
+			remoteInfo = QuarkTheater;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0DB0FB335F7E3B983CFBF482 /* MediaLibraryScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScannerTests.swift; sourceTree = "<group>"; };
+		0F696255E4B49ABD434A33E0 /* BoundFolderStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFolderStore.swift; sourceTree = "<group>"; };
+		0FEDE2A2D2565E0B64C9E468 /* FileBrowserViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserViewModel.swift; sourceTree = "<group>"; };
+		139B768255CDD2449F869974 /* FolderSelectionScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderSelectionScreen.swift; sourceTree = "<group>"; };
+		17A2104B46D28F9CA7CF0157 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		19E4CC515A985B4F96EB86EF /* LiveQuarkClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveQuarkClient.swift; sourceTree = "<group>"; };
+		295DE2A186B120AAE91EFD8C /* FilenameParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilenameParser.swift; sourceTree = "<group>"; };
+		2AF96DE1A05E81AF83C977E1 /* FileBrowserScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserScreen.swift; sourceTree = "<group>"; };
+		2BDA20DF9EE1923417C709AC /* MediaItemDetailScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaItemDetailScreen.swift; sourceTree = "<group>"; };
+		2E6CFF08591931473A4123FB /* CoreModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreModelsTests.swift; sourceTree = "<group>"; };
+		3189F23FC9C1B90C18E3BB95 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
+		3498385FE8E1CE1F8DFD4D32 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
+		372545E5D92D8FE3832203DC /* MediaCatalogRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCatalogRepository.swift; sourceTree = "<group>"; };
+		382032EF1D1CAD7DCFE6B874 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
+		3A71F687ECB005A130365F10 /* MediaLibraryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScreen.swift; sourceTree = "<group>"; };
+		3F0BEDDCF2BD7DB975CF859B /* PlaybackProbeCookieTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackProbeCookieTests.swift; sourceTree = "<group>"; };
+		436685F4CA30A3E16F8A43F3 /* MockQuarkClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockQuarkClient.swift; sourceTree = "<group>"; };
+		43C8F7B1A3316A5B41358B2F /* TMDBCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TMDBCredentialStore.swift; sourceTree = "<group>"; };
+		45E3ECD77F63FD7BBC1E9F1A /* MediaMatchScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaMatchScorer.swift; sourceTree = "<group>"; };
+		5202E60359CEB22613A9D519 /* HistoryRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryRepositoryTests.swift; sourceTree = "<group>"; };
+		5E70E4681746B80FCC39A9FA /* FilenameParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilenameParserTests.swift; sourceTree = "<group>"; };
+		5FA0D4EECE951E1E0850B332 /* QuarkClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuarkClient.swift; sourceTree = "<group>"; };
+		61720512F863BF6DF7293BE0 /* MediaLibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScanner.swift; sourceTree = "<group>"; };
+		64321F40F98F9F79FEC83C37 /* QuarkTheaterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuarkTheaterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6609DFF3A36EA4D2A4606311 /* HistoryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryScreen.swift; sourceTree = "<group>"; };
+		6FEB3531C2F654FE66B5EB70 /* HistoryRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryRepository.swift; sourceTree = "<group>"; };
+		7B5362E4FAC54A48B0391469 /* QuarkHTTPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuarkHTTPTransport.swift; sourceTree = "<group>"; };
+		7BC6AADE8DEF8DEECAF5FB1B /* PlaybackProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackProbe.swift; sourceTree = "<group>"; };
+		81F31879437340D5CD6ED968 /* QuarkTheater.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuarkTheater.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		85CA77BD11267D20E50DD7BB /* TMDBMatchScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TMDBMatchScreen.swift; sourceTree = "<group>"; };
+		904A50D3DCD129C075EAF22C /* MediaCatalogRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCatalogRepositoryTests.swift; sourceTree = "<group>"; };
+		90F3F4EA1FF04487A9D38BC7 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		9AEDE2898682370A4F5ADE39 /* TMDBService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TMDBService.swift; sourceTree = "<group>"; };
+		9D731F4699BF891D0B219D53 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics.swift; sourceTree = "<group>"; };
+		AE6ABB2D5E6F7000BEB1DAD3 /* RetryPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetryPolicy.swift; sourceTree = "<group>"; };
+		B7C568177225672C32585B8F /* QuarkTheaterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuarkTheaterApp.swift; sourceTree = "<group>"; };
+		B80D3E6EDDCF9AB756B8C5CB /* SessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViewModel.swift; sourceTree = "<group>"; };
+		C36DF349758371BC6C310809 /* RetryPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetryPolicyTests.swift; sourceTree = "<group>"; };
+		C8BF4E66509E0FA94B62AFCF /* MediaMatchScorerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaMatchScorerTests.swift; sourceTree = "<group>"; };
+		E453843142DA15D704B4D644 /* LoginScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginScreen.swift; sourceTree = "<group>"; };
+		E93844620171DE94EE40ACB8 /* PlayerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerScreen.swift; sourceTree = "<group>"; };
+		F6D48B5DB14D5FA13CF6F270 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		F882913339941443DCEB5868 /* QuarkClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuarkClientTests.swift; sourceTree = "<group>"; };
+		F9D2A8C7C3A60B3889FCE0AB /* PlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackCoordinator.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		13D58F750C9F7A867F986420 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6E83E47E070F02EAC722AC34 /* libsqlite3.tbd in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C4EECED6B022BF4B525F7174 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		105327C26B7DFA5BF2796FA4 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				2AF96DE1A05E81AF83C977E1 /* FileBrowserScreen.swift */,
+				139B768255CDD2449F869974 /* FolderSelectionScreen.swift */,
+				6609DFF3A36EA4D2A4606311 /* HistoryScreen.swift */,
+				E453843142DA15D704B4D644 /* LoginScreen.swift */,
+				2BDA20DF9EE1923417C709AC /* MediaItemDetailScreen.swift */,
+				3A71F687ECB005A130365F10 /* MediaLibraryScreen.swift */,
+				E93844620171DE94EE40ACB8 /* PlayerScreen.swift */,
+				F6D48B5DB14D5FA13CF6F270 /* RootView.swift */,
+				85CA77BD11267D20E50DD7BB /* TMDBMatchScreen.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		1B3039B2E15DD2AB7EA6156D /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				3189F23FC9C1B90C18E3BB95 /* Shared.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		31F21A95550F57CE4D6ED4FB /* QuarkTheaterTests */ = {
+			isa = PBXGroup;
+			children = (
+				2E6CFF08591931473A4123FB /* CoreModelsTests.swift */,
+				5E70E4681746B80FCC39A9FA /* FilenameParserTests.swift */,
+				5202E60359CEB22613A9D519 /* HistoryRepositoryTests.swift */,
+				904A50D3DCD129C075EAF22C /* MediaCatalogRepositoryTests.swift */,
+				0DB0FB335F7E3B983CFBF482 /* MediaLibraryScannerTests.swift */,
+				C8BF4E66509E0FA94B62AFCF /* MediaMatchScorerTests.swift */,
+				3F0BEDDCF2BD7DB975CF859B /* PlaybackProbeCookieTests.swift */,
+				F882913339941443DCEB5868 /* QuarkClientTests.swift */,
+				C36DF349758371BC6C310809 /* RetryPolicyTests.swift */,
+			);
+			path = QuarkTheaterTests;
+			sourceTree = "<group>";
+		};
+		36BB14A00AA9E00489F8147D /* Repositories */ = {
+			isa = PBXGroup;
+			children = (
+				6FEB3531C2F654FE66B5EB70 /* HistoryRepository.swift */,
+				372545E5D92D8FE3832203DC /* MediaCatalogRepository.swift */,
+			);
+			path = Repositories;
+			sourceTree = "<group>";
+		};
+		3C3E84839B99B59B50C6F000 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				3498385FE8E1CE1F8DFD4D32 /* libsqlite3.tbd */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		3E9C14F227D23D5430074308 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B7C568177225672C32585B8F /* QuarkTheaterApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		60EB5AC69302A5F5CE60854D = {
+			isa = PBXGroup;
+			children = (
+				68F1890D6194E94B80DEB289 /* QuarkTheater */,
+				31F21A95550F57CE4D6ED4FB /* QuarkTheaterTests */,
+				1B3039B2E15DD2AB7EA6156D /* Config */,
+				3C3E84839B99B59B50C6F000 /* Frameworks */,
+				AE7805B56D1DCAFAA071416F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		68F1890D6194E94B80DEB289 /* QuarkTheater */ = {
+			isa = PBXGroup;
+			children = (
+				3E9C14F227D23D5430074308 /* App */,
+				17A2104B46D28F9CA7CF0157 /* Assets.xcassets */,
+				B78ABABF964C04FBB1A2F146 /* Core */,
+				819D2CC2A05D3EAA03C46CD3 /* Media */,
+				B8553B95649523AFAA0AC8EE /* Playback */,
+				36BB14A00AA9E00489F8147D /* Repositories */,
+				870C66AB963751828488EA18 /* Services */,
+				E51D15F4241E3D68CC5CEBE5 /* ViewModels */,
+				105327C26B7DFA5BF2796FA4 /* Views */,
+			);
+			path = QuarkTheater;
+			sourceTree = "<group>";
+		};
+		819D2CC2A05D3EAA03C46CD3 /* Media */ = {
+			isa = PBXGroup;
+			children = (
+				295DE2A186B120AAE91EFD8C /* FilenameParser.swift */,
+				61720512F863BF6DF7293BE0 /* MediaLibraryScanner.swift */,
+				45E3ECD77F63FD7BBC1E9F1A /* MediaMatchScorer.swift */,
+				9AEDE2898682370A4F5ADE39 /* TMDBService.swift */,
+			);
+			path = Media;
+			sourceTree = "<group>";
+		};
+		870C66AB963751828488EA18 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				0F696255E4B49ABD434A33E0 /* BoundFolderStore.swift */,
+				382032EF1D1CAD7DCFE6B874 /* CredentialStore.swift */,
+				19E4CC515A985B4F96EB86EF /* LiveQuarkClient.swift */,
+				436685F4CA30A3E16F8A43F3 /* MockQuarkClient.swift */,
+				7B5362E4FAC54A48B0391469 /* QuarkHTTPTransport.swift */,
+				43C8F7B1A3316A5B41358B2F /* TMDBCredentialStore.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		AE7805B56D1DCAFAA071416F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				81F31879437340D5CD6ED968 /* QuarkTheater.app */,
+				64321F40F98F9F79FEC83C37 /* QuarkTheaterTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		B78ABABF964C04FBB1A2F146 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				9D731F4699BF891D0B219D53 /* Diagnostics.swift */,
+				90F3F4EA1FF04487A9D38BC7 /* Models.swift */,
+				5FA0D4EECE951E1E0850B332 /* QuarkClient.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		B8553B95649523AFAA0AC8EE /* Playback */ = {
+			isa = PBXGroup;
+			children = (
+				F9D2A8C7C3A60B3889FCE0AB /* PlaybackCoordinator.swift */,
+				7BC6AADE8DEF8DEECAF5FB1B /* PlaybackProbe.swift */,
+				AE6ABB2D5E6F7000BEB1DAD3 /* RetryPolicy.swift */,
+			);
+			path = Playback;
+			sourceTree = "<group>";
+		};
+		E51D15F4241E3D68CC5CEBE5 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				0FEDE2A2D2565E0B64C9E468 /* FileBrowserViewModel.swift */,
+				B80D3E6EDDCF9AB756B8C5CB /* SessionViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8C1A045E96B998B40533C7FF /* QuarkTheater */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C58ED996048F130760329D38 /* Build configuration list for PBXNativeTarget "QuarkTheater" */;
+			buildPhases = (
+				6ACE7BC297BF23705D4E5F56 /* Sources */,
+				13D58F750C9F7A867F986420 /* Frameworks */,
+				EB12F685944315C425ABFF58 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuarkTheater;
+			productName = QuarkTheater;
+			productReference = 81F31879437340D5CD6ED968 /* QuarkTheater.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B70E7FC58E5219C3FB7E302C /* QuarkTheaterTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E39F3A6FE32E060FF5753D4A /* Build configuration list for PBXNativeTarget "QuarkTheaterTests" */;
+			buildPhases = (
+				923019BD38FF97989F221A61 /* Sources */,
+				C4EECED6B022BF4B525F7174 /* Frameworks */,
+				E4BB408D666ACFAF1A684EC9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				93EEF436AE88283A89EC167B /* PBXTargetDependency */,
+			);
+			name = QuarkTheaterTests;
+			productName = QuarkTheaterTests;
+			productReference = 64321F40F98F9F79FEC83C37 /* QuarkTheaterTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		244210E48437B6556980A702 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					8C1A045E96B998B40533C7FF = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					B70E7FC58E5219C3FB7E302C = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 8C1A045E96B998B40533C7FF;
+					};
+				};
+			};
+			buildConfigurationList = B3CCCC363E44FDBA595AB584 /* Build configuration list for PBXProject "QuarkTheater" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"zh-Hans",
+				en,
+				Base,
+			);
+			mainGroup = 60EB5AC69302A5F5CE60854D;
+			productRefGroup = AE7805B56D1DCAFAA071416F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				8C1A045E96B998B40533C7FF /* QuarkTheater */,
+				B70E7FC58E5219C3FB7E302C /* QuarkTheaterTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E4BB408D666ACFAF1A684EC9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EB12F685944315C425ABFF58 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				479709A1CF8E9F6A97C0FDFE /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6ACE7BC297BF23705D4E5F56 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2092A43DB459EB657A4AD77C /* QuarkTheaterApp.swift in Sources */,
+				770AA89EBD543AECD0016D0F /* Diagnostics.swift in Sources */,
+				C7854BD0A9D959DE36646AF0 /* Models.swift in Sources */,
+				2D3B98EC3B7AF941899F927C /* QuarkClient.swift in Sources */,
+				25427E45FEF28F36D956681F /* FilenameParser.swift in Sources */,
+				9D38850D640F9893C2E5A11C /* MediaLibraryScanner.swift in Sources */,
+				2B61177A17B6824CE8CE212F /* MediaMatchScorer.swift in Sources */,
+				D11844E87E97F56A0784A922 /* TMDBService.swift in Sources */,
+				B3945D1DABCF8F829FBE7DE5 /* PlaybackCoordinator.swift in Sources */,
+				507FF8333924AF0F32FE00E6 /* PlaybackProbe.swift in Sources */,
+				DCEDBB74D814853797427866 /* RetryPolicy.swift in Sources */,
+				2E14895F3F6F1661C8D72E94 /* HistoryRepository.swift in Sources */,
+				E1F5C0169153A2159319140C /* MediaCatalogRepository.swift in Sources */,
+				FD2BEC7464142E01027D9C31 /* BoundFolderStore.swift in Sources */,
+				CAB8E01E9CBB33CC4B4AEF16 /* CredentialStore.swift in Sources */,
+				B515D916E9BB201AEF49252F /* LiveQuarkClient.swift in Sources */,
+				5C453EB7906090F0A1CBB897 /* MockQuarkClient.swift in Sources */,
+				9F2E7DF7A6EAE2D0373FA8CF /* QuarkHTTPTransport.swift in Sources */,
+				D2EC6DDE6DB3E46BBCE89CCB /* TMDBCredentialStore.swift in Sources */,
+				15BB6E66F5DC9F93E4B8D724 /* FileBrowserViewModel.swift in Sources */,
+				977FA64110EE4FA16E0382D6 /* SessionViewModel.swift in Sources */,
+				FD3DE98F4F8B8BCD46264657 /* FileBrowserScreen.swift in Sources */,
+				8482001FC4F7948E119F6502 /* FolderSelectionScreen.swift in Sources */,
+				64A6AD2A1D21599D512A15FE /* HistoryScreen.swift in Sources */,
+				F6B4B58A3EA99B32CB0B5EE0 /* LoginScreen.swift in Sources */,
+				B4EF7D85CBF251774FA6B18B /* MediaItemDetailScreen.swift in Sources */,
+				556946F9B16BB95A050AB2FF /* MediaLibraryScreen.swift in Sources */,
+				90B77B34D4C84157019471A9 /* PlayerScreen.swift in Sources */,
+				EEDA47AB6927F45968838A5B /* RootView.swift in Sources */,
+				F02644E37AD77DF0B9767AB0 /* TMDBMatchScreen.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		923019BD38FF97989F221A61 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A246BB79379E2B78F63A741B /* CoreModelsTests.swift in Sources */,
+				28561753C61072167E7822C2 /* FilenameParserTests.swift in Sources */,
+				2188C97F1B89AE85233E34D5 /* HistoryRepositoryTests.swift in Sources */,
+				44EF1C6DFC507E9E10927513 /* MediaCatalogRepositoryTests.swift in Sources */,
+				90FAB9E25D2C3661134FF5C9 /* MediaLibraryScannerTests.swift in Sources */,
+				63661B878443CA12B23661C3 /* MediaMatchScorerTests.swift in Sources */,
+				C32A1EC8591C51A98F99EE25 /* PlaybackProbeCookieTests.swift in Sources */,
+				EC963C0D0CB109B5A7786EC5 /* QuarkClientTests.swift in Sources */,
+				2DDE4CE03BC7EC72D5581116 /* RetryPolicyTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		93EEF436AE88283A89EC167B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8C1A045E96B998B40533C7FF /* QuarkTheater */;
+			targetProxy = 8619E39B688A33CB92F66F7B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		024BCF0283214E898A5FA442 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.quarktheater.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/QuarkTheater.app/QuarkTheater";
+			};
+			name = Release;
+		};
+		0E67DDB24008359A3BF8F1AB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEVELOPMENT_TEAM = SC922VXN5U;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Theater";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.quarktheater.app.wangbin;
+				PRODUCT_MODULE_NAME = QuarkTheater;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		65C6F64AAF575DB1ACED7604 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 3189F23FC9C1B90C18E3BB95 /* Shared.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_TESTABILITY = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				ONLY_ACTIVE_ARCH = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		85D28ABFEC3101C27B0762D5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.quarktheater.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/QuarkTheater.app/QuarkTheater";
+			};
+			name = Debug;
+		};
+		95AA40661CB6DF07E4144EF2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 3189F23FC9C1B90C18E3BB95 /* Shared.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		CCF7D3BC6FBEDAE8FA277D07 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEVELOPMENT_TEAM = SC922VXN5U;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Theater";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.quarktheater.app.wangbin;
+				PRODUCT_MODULE_NAME = QuarkTheater;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B3CCCC363E44FDBA595AB584 /* Build configuration list for PBXProject "QuarkTheater" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				95AA40661CB6DF07E4144EF2 /* Debug */,
+				65C6F64AAF575DB1ACED7604 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C58ED996048F130760329D38 /* Build configuration list for PBXNativeTarget "QuarkTheater" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0E67DDB24008359A3BF8F1AB /* Debug */,
+				CCF7D3BC6FBEDAE8FA277D07 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E39F3A6FE32E060FF5753D4A /* Build configuration list for PBXNativeTarget "QuarkTheaterTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				85D28ABFEC3101C27B0762D5 /* Debug */,
+				024BCF0283214E898A5FA442 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
 	};
-	rootObject = 244210E48437B6556980A702;
+	rootObject = 244210E48437B6556980A702 /* Project object */;
 }

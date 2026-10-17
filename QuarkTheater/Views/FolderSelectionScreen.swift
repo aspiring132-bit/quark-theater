@@ -18,45 +18,85 @@ struct FolderSelectionScreen: View {
         self.onComplete = onComplete
     }
 
+    // Path Stack for deep drill-down navigation (BUG-007, REDESIGN-010)
+    @State private var pathStack: [(id: String, name: String)] = [("0", "我的网盘")]
     @State private var availableFolders: [CloudFile] = []
-    @State private var selectedFolderIDs: Set<String> = []
+    @State private var boundFoldersMap: [String: String] = [:] // fileId -> folderName
     @State private var isLoading = true
     @State private var errorMessage: String?
 
+    private var currentFolder: (id: String, name: String) {
+        pathStack.last ?? ("0", "我的网盘")
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
-                VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 28) {
+                // Header
+                VStack(alignment: .leading, spacing: 8) {
                     Text("绑定影视媒体库文件夹")
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
-                    Text("请选择包含电影、电视剧的网盘文件夹。仅扫描绑定文件夹，大幅提升刮削速度并保持影视库整洁。")
-                        .font(.title3).foregroundStyle(.secondary)
+                        .font(.system(size: 44, weight: .bold, design: .rounded))
+                    Text("可逐级进入子文件夹选择影视目录。仅扫描绑定文件夹，大幅提升刮削速度并保持影视库整洁。")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
                 }
 
-                // Top Controls: "确认绑定" is the FIRST button, so default focus lands here immediately!
-                HStack(spacing: 24) {
+                // MARK: - Action Toolbar
+                HStack(spacing: 20) {
                     Button {
                         saveAndDismiss()
                     } label: {
-                        Label(selectedFolderIDs.isEmpty ? "进入媒体库 (全盘扫描)" : "确认绑定并进入媒体库 (\(selectedFolderIDs.count) 个文件夹)",
-                              systemImage: "film.stack")
-                            .font(.headline)
+                        Label(
+                            boundFoldersMap.isEmpty ? "进入影院 (全盘扫描)" : "确认绑定并进入影院 (\(boundFoldersMap.count) 个文件夹)",
+                            systemImage: "film.stack"
+                        )
+                        .font(.headline.bold())
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.cyan)
                     .disabled(isLoading)
 
-                    Button("全选") {
-                        selectedFolderIDs = Set(availableFolders.map(\.fileId))
+                    if pathStack.count > 1 {
+                        Button {
+                            goBack()
+                        } label: {
+                            Label("返回上一级", systemImage: "arrow.turn.up.left")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isLoading)
+                    }
+
+                    if currentFolder.id != "0" {
+                        let isCurrentBound = boundFoldersMap[currentFolder.id] != nil
+                        Button {
+                            if isCurrentBound {
+                                boundFoldersMap.removeValue(forKey: currentFolder.id)
+                            } else {
+                                boundFoldersMap[currentFolder.id] = currentFolder.name
+                            }
+                        } label: {
+                            Label(
+                                isCurrentBound ? "取消绑定当前目录" : "绑定当前目录 (\(currentFolder.name))",
+                                systemImage: isCurrentBound ? "checkmark.circle.fill" : "plus.circle"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isLoading)
+                    }
+
+                    Button("全选本页") {
+                        for folder in availableFolders {
+                            boundFoldersMap[folder.fileId] = folder.name
+                        }
                     }
                     .buttonStyle(.bordered)
                     .disabled(isLoading || availableFolders.isEmpty)
 
-                    Button("清除选择") {
-                        selectedFolderIDs.removeAll()
+                    Button("清空所有已选") {
+                        boundFoldersMap.removeAll()
                     }
                     .buttonStyle(.bordered)
-                    .disabled(isLoading || selectedFolderIDs.isEmpty)
+                    .disabled(isLoading || boundFoldersMap.isEmpty)
 
                     Spacer()
 
@@ -66,12 +106,56 @@ struct FolderSelectionScreen: View {
                     }
                     .buttonStyle(.bordered)
                 }
+                .focusSection()
 
+                // MARK: - Breadcrumb Navigation Bar
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.fill")
+                        .foregroundStyle(.cyan)
+                    Text("当前路径：")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(pathStack.indices, id: \.self) { index in
+                        let item = pathStack[index]
+                        if index > 0 {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button {
+                            if index < pathStack.count - 1 {
+                                pathStack = Array(pathStack.prefix(index + 1))
+                                Task { await loadFolders(folderID: currentFolder.id) }
+                            }
+                        } label: {
+                            Text(item.name)
+                                .font(index == pathStack.count - 1 ? .headline.bold() : .headline)
+                                .foregroundStyle(index == pathStack.count - 1 ? Color.cyan : Color.white)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(index == pathStack.count - 1)
+                    }
+
+                    Spacer()
+
+                    if !boundFoldersMap.isEmpty {
+                        Text("已选定 \(boundFoldersMap.count) 个文件夹")
+                            .font(.callout.bold())
+                            .foregroundStyle(.cyan)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                .focusSection()
+
+                // MARK: - Folder Content List / Grid
                 if isLoading {
                     HStack(spacing: 16) {
                         ProgressView()
                             .progressViewStyle(.circular)
-                        Text("正在读取网盘目录…")
+                        Text("正在读取目录【\(currentFolder.name)】…")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
@@ -79,104 +163,163 @@ struct FolderSelectionScreen: View {
                 } else if let error = errorMessage {
                     VStack(alignment: .leading, spacing: 16) {
                         Text(error).foregroundStyle(.orange)
-                        Button("重试") { Task { await loadFolders() } }
+                        Button("重试") { Task { await loadFolders(folderID: currentFolder.id) } }
                             .buttonStyle(.bordered)
                     }
                 } else if availableFolders.isEmpty {
-                    Text("网盘根目录未检测到文件夹，可直接使用全盘扫描。").foregroundStyle(.secondary)
-                } else {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 24), GridItem(.flexible(), spacing: 24)], spacing: 24) {
-                        ForEach(availableFolders) { folder in
-                            let isSelected = selectedFolderIDs.contains(folder.fileId)
-                            FolderCardButton(folder: folder, isSelected: isSelected) {
-                                if isSelected {
-                                    selectedFolderIDs.remove(folder.fileId)
-                                } else {
-                                    selectedFolderIDs.insert(folder.fileId)
-                                }
-                            }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("当前目录下没有子文件夹。")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                        if currentFolder.id != "0" {
+                            Text("若本目录包含影视文件，可点击上方“绑定当前目录”将其设为影视库。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
+                    .padding(.vertical, 40)
+                } else {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 20), GridItem(.flexible(), spacing: 20)], spacing: 20) {
+                        ForEach(availableFolders) { folder in
+                            let isSelected = boundFoldersMap[folder.fileId] != nil
+                            FolderItemRow(
+                                folder: folder,
+                                isSelected: isSelected,
+                                onToggleSelect: {
+                                    if isSelected {
+                                        boundFoldersMap.removeValue(forKey: folder.fileId)
+                                    } else {
+                                        boundFoldersMap[folder.fileId] = folder.name
+                                    }
+                                },
+                                onEnter: {
+                                    enterFolder(folder)
+                                }
+                            )
+                        }
+                    }
+                    .focusSection()
                 }
             }
             .padding(60)
-            .frame(maxWidth: 1500, alignment: .leading)
+            .frame(maxWidth: 1600, alignment: .leading)
         }
         .background(Color.black.opacity(0.95).ignoresSafeArea())
         .task {
-            selectedFolderIDs = BoundFolderStore.boundFolderIDs(accountID: accountID)
-            await loadFolders()
+            let names = BoundFolderStore.boundFolderNames(accountID: accountID)
+            let ids = BoundFolderStore.boundFolderIDs(accountID: accountID)
+            var map = names
+            for id in ids where map[id] == nil {
+                map[id] = "影视文件夹"
+            }
+            boundFoldersMap = map
+            await loadFolders(folderID: currentFolder.id)
         }
     }
 
-    private func loadFolders() async {
+    private func enterFolder(_ folder: CloudFile) {
+        pathStack.append((id: folder.fileId, name: folder.name))
+        Task {
+            await loadFolders(folderID: folder.fileId)
+        }
+    }
+
+    private func goBack() {
+        guard pathStack.count > 1 else { return }
+        pathStack.removeLast()
+        Task {
+            await loadFolders(folderID: currentFolder.id)
+        }
+    }
+
+    private func loadFolders(folderID: String) async {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         do {
-            let page = try await client.listFiles(parentID: "0", page: 1, pageSize: 100)
-            availableFolders = page.files.filter(\.isDirectory)
-            // If user has never bound any folders, pre-select folders that look like media (e.g. BT, 视频, 影视)
-            if !BoundFolderStore.hasConfigured(accountID: accountID) && selectedFolderIDs.isEmpty {
+            let page = try await client.listFiles(parentID: folderID, page: 1, pageSize: 100)
+            availableFolders = page.files.filter(\.isDirectory).sorted {
+                $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+
+            // Auto pre-select likely media folders on very first launch
+            if !BoundFolderStore.hasConfigured(accountID: accountID) && boundFoldersMap.isEmpty && folderID == "0" {
                 let mediaKeywords = ["bt", "下载", "影视", "电影", "剧", "视频", "media", "movie", "tv"]
                 for folder in availableFolders {
                     let lower = folder.name.lowercased()
                     if mediaKeywords.contains(where: { lower.contains($0) }) {
-                        selectedFolderIDs.insert(folder.fileId)
+                        boundFoldersMap[folder.fileId] = folder.name
                     }
                 }
             }
         } catch {
             errorMessage = userFacingError(error)
-            diagnostics.recordError(error, context: "读取绑定文件夹列表")
+            diagnostics.recordError(error, context: "读取网盘目录 [\(folderID)]")
         }
     }
 
     private func saveAndDismiss() {
-        let selectedList = availableFolders.filter { selectedFolderIDs.contains($0.fileId) }.map { ($0.fileId, $0.name) }
-        BoundFolderStore.saveBoundFolders(folders: selectedList, accountID: accountID)
+        let list = boundFoldersMap.map { (id: $0.key, name: $0.value) }
+        BoundFolderStore.saveBoundFolders(folders: list, accountID: accountID)
         onComplete()
         isPresented = false
         dismiss()
     }
 }
 
+// MARK: - Folder Item Row Component with Drill-Down & Selection
 @MainActor
-private struct FolderCardButton: View {
+private struct FolderItemRow: View {
     let folder: CloudFile
     let isSelected: Bool
-    let action: () -> Void
+    let onToggleSelect: () -> Void
+    let onEnter: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 20) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 32))
-                    .foregroundStyle(isSelected ? Color.cyan : Color.secondary)
+        HStack(spacing: 12) {
+            // Select / Toggle Button
+            Button(action: onToggleSelect) {
+                HStack(spacing: 16) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 28))
+                        .foregroundStyle(isSelected ? Color.cyan : Color.secondary)
 
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(Color.cyan)
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(Color.cyan)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(folder.name)
-                        .font(.headline)
-                        .lineLimit(2)
-                    Text(isSelected ? "已选定影视库 · 点击取消" : "未选定 · 点击绑定")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(folder.name)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text(isSelected ? "已选定为影视库 · 点击取消" : "点击选定为影视库")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
                 }
-                Spacer()
+                .padding(16)
+                .background(isSelected ? Color.cyan.opacity(0.12) : Color.white.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(isSelected ? Color.cyan : Color.white.opacity(0.08), lineWidth: isSelected ? 2 : 1)
+                )
             }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? Color.cyan.opacity(0.12) : Color.white.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(isSelected ? Color.cyan : Color.white.opacity(0.1), lineWidth: isSelected ? 2 : 1)
-            )
+            .buttonStyle(.card)
+
+            // Drill down into subfolder button
+            Button(action: onEnter) {
+                HStack(spacing: 6) {
+                    Text("进入")
+                        .font(.subheadline.bold())
+                    Image(systemName: "chevron.right")
+                        .font(.caption.bold())
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 22)
+            }
+            .buttonStyle(.bordered)
         }
-        .buttonStyle(.card)
     }
 }

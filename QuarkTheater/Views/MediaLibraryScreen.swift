@@ -114,38 +114,26 @@ struct MediaLibraryScreen: View {
                     // Category Filter Pills (High-contrast, never truncated or vertically wrapped)
                     HStack(spacing: 10) {
                         ForEach([("all", "全部"), (MediaType.movie.rawValue, "电影"), (MediaType.series.rawValue, "电视剧")], id: \.0) { tag, title in
-                            Button {
+                            FilterPillButton(
+                                title: title,
+                                isSelected: category == tag,
+                                minWidth: 88
+                            ) {
                                 category = tag
-                            } label: {
-                                Text(title)
-                                    .font(.headline)
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    .foregroundStyle(category == tag ? .cyan : .white)
-                                    .frame(minWidth: 88)
                             }
-                            .buttonStyle(.bordered)
-                            .tint(category == tag ? .cyan : .clear)
-                            .focused($isFilterFocused)
                         }
                     }
 
                     // Sort Filter Pills
                     HStack(spacing: 10) {
                         ForEach([("name", "按名称"), ("year", "按年份")], id: \.0) { tag, title in
-                            Button {
+                            FilterPillButton(
+                                title: title,
+                                isSelected: sortMode == tag,
+                                minWidth: 96
+                            ) {
                                 sortMode = tag
-                            } label: {
-                                Text(title)
-                                    .font(.subheadline)
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    .foregroundStyle(sortMode == tag ? .cyan : .white.opacity(0.85))
-                                    .frame(minWidth: 96)
                             }
-                            .buttonStyle(.bordered)
-                            .tint(sortMode == tag ? .cyan : .clear)
-                            .focused($isFilterFocused)
                         }
                     }
 
@@ -193,6 +181,7 @@ struct MediaLibraryScreen: View {
                     .buttonStyle(.bordered)
                 }
                 .padding(.horizontal, 60)
+                .focusSection()
 
                 // Continue Watching Row (if any)
                 HomeContinueWatchingView(repository: history, accountID: accountID, client: client, diagnostics: diagnostics)
@@ -276,6 +265,7 @@ struct MediaLibraryScreen: View {
                         }
                     }
                     .padding(.horizontal, 60)
+                    .focusSection()
                 } else if !isScanning {
                     VStack(spacing: 24) {
                         Image(systemName: "film.stack")
@@ -294,6 +284,7 @@ struct MediaLibraryScreen: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(80)
+                    .focusSection()
                 }
 
                 // MARK: - 4. Unmatched Files (待识别文件)
@@ -333,6 +324,7 @@ struct MediaLibraryScreen: View {
                         }
                     }
                     .padding(.horizontal, 60)
+                    .focusSection()
                 }
             }
             .padding(.bottom, 60)
@@ -807,7 +799,10 @@ struct MediaLibraryScreen: View {
                             duration: nil,
                             matchConfidence: best.confidence,
                             rating: best.result.voteAverage,
-                            genreIDs: best.result.genreIDs
+                            genreIDs: best.result.genreIDs,
+                            sourceType: .quark,
+                            seasonNumber: candidate.parsedName.seasonNumber,
+                            episodeNumber: candidate.parsedName.episodeNumber
                         )
                         try catalog.confirm(item, accountID: accountID)
                     }
@@ -838,5 +833,52 @@ struct MediaLibraryScreen: View {
         } catch {
             message = error.localizedDescription
         }
+    }
+}
+
+// MARK: - High-Contrast Focusable Filter Pill Button (BUG-004, BUG-008)
+private struct FilterPillButton: View {
+    let title: String
+    let isSelected: Bool
+    let minWidth: CGFloat
+    let action: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.headline.weight(isFocused || isSelected ? .bold : .medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .frame(minWidth: minWidth)
+                .background(
+                    Group {
+                        if isFocused {
+                            Color.white
+                        } else if isSelected {
+                            Color.cyan.opacity(0.3)
+                        } else {
+                            Color.white.opacity(0.08)
+                        }
+                    }
+                )
+                .foregroundStyle(
+                    isFocused ? Color.black : (isSelected ? Color.cyan : Color.white.opacity(0.85))
+                )
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule().stroke(
+                        isFocused ? Color.white : (isSelected ? Color.cyan : Color.white.opacity(0.12)),
+                        lineWidth: isFocused ? 2.5 : (isSelected ? 2 : 1)
+                    )
+                )
+                .scaleEffect(isFocused ? 1.08 : 1.0)
+                .animation(.spring(response: 0.2, dampingFraction: 0.75), value: isFocused)
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
     }
 }

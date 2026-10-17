@@ -17,8 +17,9 @@ enum FilenameParser {
         #"(?i)^(.*?)(?:[ ._-]|\b)?(\d{1,2})[xX](\d{1,3})(?:[ ._-]|\b|$)"#
     ]
     private static let chineseEpisodePattern = #"(?i)^(.*?)[ ._-]*第\s*(\d{1,3})\s*集"#
-    // Bare episode numbers: "01", "(09)", "9", "01.mp4"
-    private static let bareNumberPattern = #"^\(?(\d{1,3})\)?$"#
+    // Bare or prefixed episode numbers: "01", "(09)", "9", "ep01", "E05", "0-1", "0-2", "01-02", "04_01"
+    private static let bareNumberPattern = #"(?i)^(?:ep?|第)?[ ._-]?\(?(\d{1,3})\)?(?:集)?$"#
+    private static let hyphenEpisodePattern = #"(?i)^(?:[Ss]?\d{1,2}[-_])(\d{1,3})$"#
     private static let yearPattern = #"(?:\(|\b)((?:19|20)\d{2})(?:\)|\b)"#
     private static let releaseTail = #"(?i)[ ._-]+(?:2160p|1080p|720p|480p|4k|8k|bluray|blu.?ray|web.?dl|webrip|hdtv|proper|remux|x26[45]|h\.?26[45]|hevc|avc|aac|dts).*$"#
 
@@ -59,14 +60,15 @@ enum FilenameParser {
             return ParsedMediaName(
                 title: effectiveTitle,
                 year: nil, mediaType: .series,
-                seasonNumber: detectedSeasonNumber ?? 1, episodeNumber: episode,
+                seasonNumber: detectedSeasonNumber, episodeNumber: episode,
                 inferredFromParent: title.isEmpty && detectedShowTitle != nil
             )
         }
 
-        // 2. Bare number episode (e.g. "01.mp4", "(09)", "9", "12")
-        if let match = firstMatch(bareNumberPattern, in: base.trimmingCharacters(in: .whitespaces)),
-           let episode = Int(capture(match, 1, base.trimmingCharacters(in: .whitespaces))) {
+        // 3. Bare or prefixed episode (e.g. "01.mp4", "(09)", "9", "ep01", "E05")
+        let trimmed = base.trimmingCharacters(in: .whitespaces)
+        if let match = firstMatch(bareNumberPattern, in: trimmed),
+           let episode = Int(capture(match, 1, trimmed)) {
             let effectiveTitle = detectedShowTitle ?? folderTitle(parentFolderName) ?? base
             return ParsedMediaName(
                 title: effectiveTitle,
@@ -76,7 +78,19 @@ enum FilenameParser {
             )
         }
 
-        // 3. Year-anchored movie
+        // 4. Hyphenated episode (e.g. "0-1", "0-2", "04-01")
+        if let match = firstMatch(hyphenEpisodePattern, in: trimmed),
+           let episode = Int(capture(match, 1, trimmed)) {
+            let effectiveTitle = detectedShowTitle ?? folderTitle(parentFolderName) ?? base
+            return ParsedMediaName(
+                title: effectiveTitle,
+                year: nil, mediaType: .series,
+                seasonNumber: detectedSeasonNumber, episodeNumber: episode,
+                inferredFromParent: true
+            )
+        }
+
+        // 5. Year-anchored movie
         let matchYear = firstMatch(yearPattern, in: base)
         let year = matchYear.flatMap { Int(capture($0, 1, base)) }
         let titleEnd = matchYear?.range.location ?? (base as NSString).length
@@ -86,15 +100,15 @@ enum FilenameParser {
 
         return ParsedMediaName(
             title: title.isEmpty ? (detectedShowTitle ?? base) : title,
-            year: year, mediaType: .movie,
-            seasonNumber: nil, episodeNumber: nil,
+            year: year, mediaType: detectedSeasonNumber != nil ? .series : .movie,
+            seasonNumber: detectedSeasonNumber, episodeNumber: nil,
             inferredFromParent: false
         )
     }
 
     // MARK: - Hierarchy Analysis
 
-    /// Analyzes the full directory path array (e.g. ["来自：分享", "G 高堡奇人S01~S04", "S04"])
+    /// Analyzes the full directory path array (e.g. ["来自：分享", "G 高堡奇人S01~S04", "Season 04", "S04"])
     /// and extracts (Show Title, Season Number).
     static func extractShowAndSeason(fromPath pathComponents: [String]) -> (show: String?, season: Int?) {
         var season: Int? = nil
@@ -106,12 +120,12 @@ enum FilenameParser {
                 continue
             }
 
-            // Check if this component specifies a season (e.g. "S04", "S01", "第2季", "大西洋帝国S01")
+            // Check if this component specifies a season (e.g. "Season 04", "S04", "第2季", "大西洋帝国S01")
             if season == nil {
-                if let m = firstMatch(#"(?i)[Ss](\d{1,2})(?:[^\d]|$)"#, in: comp),
+                if let m = firstMatch(#"(?i)(?:season|s)\s*(\d{1,2})(?:[^\d]|$)"#, in: comp),
                    let num = Int(capture(m, 1, comp)) {
                     season = num
-                } else if let m = firstMatch(#"第(\d+)季"#, in: comp),
+                } else if let m = firstMatch(#"第\s*(\d{1,2})\s*季"#, in: comp),
                           let num = Int(capture(m, 1, comp)) {
                     season = num
                 }

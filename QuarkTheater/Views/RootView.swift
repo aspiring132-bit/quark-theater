@@ -78,28 +78,31 @@ struct RootView: View {
     private var floatingDockBar: some View {
         HStack(spacing: 8) {
             ForEach(RootTab.allCases, id: \.self) { tab in
+                let isFocused = (focusedDockTab == tab)
+                let isSelected = (selectedTab == tab)
+
                 Button {
                     selectedTab = tab
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: tab.icon)
                         Text(tab.title)
-                            .font(.headline)
+                            .font(.headline.weight(isFocused || isSelected ? .bold : .medium))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.horizontal, 22)
                     .padding(.vertical, 12)
-                    .foregroundStyle(selectedTab == tab ? .black : .white)
-                    .background(
-                        selectedTab == tab ? Color.white : Color.clear,
-                        in: Capsule()
+                    .foregroundStyle(dockForeground(isFocused: isFocused, isSelected: isSelected))
+                    .background(dockBackground(isFocused: isFocused, isSelected: isSelected), in: Capsule())
+                    .overlay(
+                        Capsule().stroke(dockStroke(isFocused: isFocused, isSelected: isSelected), lineWidth: isFocused ? 2 : 1)
                     )
                 }
                 .buttonStyle(.plain)
                 .focused($focusedDockTab, equals: tab)
-                .scaleEffect(focusedDockTab == tab ? 1.08 : 1.0)
-                .animation(.easeOut(duration: 0.18), value: focusedDockTab)
+                .scaleEffect(isFocused ? 1.08 : 1.0)
+                .animation(.easeOut(duration: 0.18), value: isFocused)
             }
         }
         .padding(6)
@@ -110,9 +113,28 @@ struct RootView: View {
         )
         .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 12)
         .padding(.top, 36)
+        .focusSection()
         .offset(y: (isDockHidden && focusedDockTab == nil) ? -140 : 0)
         .opacity((isDockHidden && focusedDockTab == nil) ? 0 : 1)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isDockHidden)
+    }
+
+    private func dockBackground(isFocused: Bool, isSelected: Bool) -> Color {
+        if isFocused { return .white }
+        if isSelected { return Color.white.opacity(0.22) }
+        return .clear
+    }
+
+    private func dockForeground(isFocused: Bool, isSelected: Bool) -> Color {
+        if isFocused { return .black }
+        if isSelected { return .white }
+        return Color.white.opacity(0.7)
+    }
+
+    private func dockStroke(isFocused: Bool, isSelected: Bool) -> Color {
+        if isFocused { return .white }
+        if isSelected { return Color.white.opacity(0.3) }
+        return .clear
     }
 
     // MARK: - Cinema Tab
@@ -140,7 +162,7 @@ struct RootView: View {
                             .scaledToFit()
                             .frame(width: 80, height: 80)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("QUARK THEATER").font(.system(size: 44, weight: .bold, design: .rounded))
+                            Text("THEATER").font(.system(size: 44, weight: .bold, design: .rounded))
                             Text("登录夸克网盘，开启电视私人影院").font(.headline).foregroundStyle(.secondary)
                         }
                     }
@@ -235,7 +257,8 @@ private struct SourcesManagementScreen: View {
                             } label: {
                                 Label(count > 0 ? "管理绑定文件夹 (\(count))" : "选择绑定文件夹", systemImage: "folder.badge.gearshape")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.borderedProminent)
+                            .tint(.cyan)
                         }
                     }
                     .padding(24)
@@ -327,6 +350,7 @@ private struct SourcesManagementScreen: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18))
                     .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.08), lineWidth: 1))
                 }
+                .focusSection()
 
                 // Cloud File Browser Section
                 if let client {
@@ -337,10 +361,12 @@ private struct SourcesManagementScreen: View {
                                           accountID: accountID, history: history)
                     }
                     .padding(.top, 16)
+                    .focusSection()
                 }
             }
             .padding(60)
         }
+        .focusSection()
     }
 }
 
@@ -372,7 +398,7 @@ private struct SettingsScreen: View {
                         .shadow(color: Color(red: 0, green: 0.85, blue: 1.0).opacity(0.3), radius: 12, x: 0, y: 4)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("QUARK THEATER · 设置").font(.largeTitle.bold())
+                        Text("THEATER · 设置").font(.largeTitle.bold())
                         Text("版本：\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0") · tvOS 原生私人影院")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }

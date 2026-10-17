@@ -99,11 +99,14 @@ struct MediaItem: Codable, Identifiable {
     var rating: Double? = nil
     var genreIDs: [Int]? = nil
     var sourceType: StorageSourceType = .quark
+    var seasonNumber: Int? = nil
+    var episodeNumber: Int? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, fileId, mediaType, title, year, tmdbId
         case posterPath, backdropPath, overview, duration
         case matchConfidence, rating, genreIDs, sourceType
+        case seasonNumber, episodeNumber
     }
 
     init(id: String, fileId: String, mediaType: MediaType, title: String,
@@ -111,7 +114,8 @@ struct MediaItem: Codable, Identifiable {
          backdropPath: String? = nil, overview: String? = nil,
          duration: TimeInterval? = nil, matchConfidence: Double? = nil,
          rating: Double? = nil, genreIDs: [Int]? = nil,
-         sourceType: StorageSourceType = .quark) {
+         sourceType: StorageSourceType = .quark,
+         seasonNumber: Int? = nil, episodeNumber: Int? = nil) {
         self.id = id
         self.fileId = fileId
         self.mediaType = mediaType
@@ -126,6 +130,8 @@ struct MediaItem: Codable, Identifiable {
         self.rating = rating
         self.genreIDs = genreIDs
         self.sourceType = sourceType
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
     }
 
     init(from decoder: Decoder) throws {
@@ -144,6 +150,8 @@ struct MediaItem: Codable, Identifiable {
         rating = try container.decodeIfPresent(Double.self, forKey: .rating)
         genreIDs = try container.decodeIfPresent([Int].self, forKey: .genreIDs)
         sourceType = try container.decodeIfPresent(StorageSourceType.self, forKey: .sourceType) ?? .quark
+        seasonNumber = try container.decodeIfPresent(Int.self, forKey: .seasonNumber)
+        episodeNumber = try container.decodeIfPresent(Int.self, forKey: .episodeNumber)
     }
 }
 

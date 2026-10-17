@@ -36,13 +36,25 @@ struct MediaItemDetailScreen: View {
                 modifiedAt: nil,
                 isDirectory: false
             )
-            return (metadata, file, FilenameParser.parse(file.name))
+            let cand = candidates.first(where: { $0.file.fileId == metadata.fileId })
+            let season = metadata.seasonNumber ?? cand?.parsedName.seasonNumber
+            let episode = metadata.episodeNumber ?? cand?.parsedName.episodeNumber
+            let parsed = cand?.parsedName ?? FilenameParser.parse(file.name, detectedSeasonNumber: season)
+            let effectiveParsed = ParsedMediaName(
+                title: parsed.title,
+                year: parsed.year,
+                mediaType: metadata.mediaType,
+                seasonNumber: season ?? parsed.seasonNumber,
+                episodeNumber: episode ?? parsed.episodeNumber,
+                inferredFromParent: parsed.inferredFromParent
+            )
+            return (metadata, file, effectiveParsed)
         }.sorted {
-            let s0 = $0.2.seasonNumber ?? 1
-            let s1 = $1.2.seasonNumber ?? 1
+            let s0 = $0.2.seasonNumber ?? 0
+            let s1 = $1.2.seasonNumber ?? 0
             if s0 != s1 { return s0 < s1 }
-            let e0 = $0.2.episodeNumber ?? 1
-            let e1 = $1.2.episodeNumber ?? 1
+            let e0 = $0.2.episodeNumber ?? 0
+            let e1 = $1.2.episodeNumber ?? 0
             return e0 < e1
         }
     }
@@ -172,25 +184,16 @@ struct MediaItemDetailScreen: View {
                                 ForEach(sortedSeasons, id: \.self) { season in
                                     let count = seasonGroups[season]?.count ?? 0
                                     let isSelected = selectedSeason == season
-                                    Button {
+                                    SeasonTabButton(season: season, count: count, isSelected: isSelected) {
                                         selectedSeason = season
-                                    } label: {
-                                        Text("第 \(season) 季 (\(count)集)")
-                                            .font(.headline)
-                                            .padding(.horizontal, 24)
-                                            .padding(.vertical, 12)
-                                            .background(isSelected ? Color.cyan.opacity(0.3) : Color.white.opacity(0.08))
-                                            .clipShape(Capsule())
-                                            .overlay(
-                                                Capsule().stroke(isSelected ? Color.cyan : Color.clear, lineWidth: 2)
-                                            )
                                     }
-                                    .buttonStyle(.borderless)
                                 }
                             }
                             .padding(.horizontal, 60)
+                            .padding(.vertical, 8)
                         }
                     }
+                    .focusSection()
                 }
 
                 // MARK: - 3. Episodes Grid / Rail
@@ -205,7 +208,7 @@ struct MediaItemDetailScreen: View {
                     }
                     .padding(.horizontal, 60)
 
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 380), spacing: 24)], spacing: 24) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 24), count: 3), spacing: 24) {
                         ForEach(currentSeasonEpisodes.indices, id: \.self) { index in
                             let entry = currentSeasonEpisodes[index]
                             episodeCard(entry.0, file: entry.1, parsed: entry.2)
@@ -213,6 +216,7 @@ struct MediaItemDetailScreen: View {
                     }
                     .padding(.horizontal, 60)
                 }
+                .focusSection()
             }
             .padding(.bottom, 80)
             }
@@ -376,5 +380,53 @@ struct MediaItemDetailScreen: View {
             )
         }
         .frame(height: 480)
+    }
+}
+
+// MARK: - High-Contrast Focusable Season Tab Button (BUG-001, BUG-008)
+private struct SeasonTabButton: View {
+    let season: Int
+    let count: Int
+    let isSelected: Bool
+    let action: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text("第 \(season) 季")
+                    .font(.headline.weight(isFocused || isSelected ? .bold : .medium))
+                Text("(\(count)集)")
+                    .font(.subheadline)
+                    .foregroundStyle(isFocused ? Color.black.opacity(0.7) : (isSelected ? Color.cyan.opacity(0.8) : Color.secondary))
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 14)
+            .background(
+                Group {
+                    if isFocused {
+                        Color.white
+                    } else if isSelected {
+                        Color.cyan.opacity(0.25)
+                    } else {
+                        Color.white.opacity(0.08)
+                    }
+                }
+            )
+            .foregroundStyle(isFocused ? Color.black : (isSelected ? Color.cyan : Color.white))
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(
+                        isFocused ? Color.white : (isSelected ? Color.cyan : Color.white.opacity(0.15)),
+                        lineWidth: isFocused ? 3 : (isSelected ? 2 : 1)
+                    )
+            )
+            .scaleEffect(isFocused ? 1.08 : 1.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.75), value: isFocused)
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
     }
 }
