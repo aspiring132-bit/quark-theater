@@ -461,7 +461,7 @@
 			buildSettings = {
 				DEVELOPMENT_TEAM = SC922VXN5U;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Theater";
+				INFOPLIST_KEY_CFBundleDisplayName = Theater;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -528,7 +528,7 @@
 			buildSettings = {
 				DEVELOPMENT_TEAM = SC922VXN5U;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Theater";
+				INFOPLIST_KEY_CFBundleDisplayName = Theater;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				LD_RUNPATH_SEARCH_PATHS = (
