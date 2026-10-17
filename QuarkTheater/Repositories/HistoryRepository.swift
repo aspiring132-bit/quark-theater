@@ -29,7 +29,10 @@ enum HistoryRepositoryError: Error, LocalizedError, Equatable {
 /// recover purged viewing history. Cross-device/durable backup is not implemented.
 @MainActor
 final class HistoryRepository {
-    private var database: OpaquePointer?
+    // nonisolated(unsafe): written only from init (before other references exist)
+    // and read only from deinit (after all references drop). All other accesses
+    // are on the main actor. Safe, but opted out of Swift 6 actor isolation checking.
+    nonisolated(unsafe) private var database: OpaquePointer?
     private static let schemaVersion = 1
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 

@@ -75,6 +75,7 @@ struct MediaItemDetailScreen: View {
         }
     }
 
+    @ViewBuilder
     private func episodeRow(_ metadata: MediaItem, file: CloudFile, parsed: ParsedMediaName) -> some View {
         let episodeCode = String(format: "S%02dE%02d", parsed.seasonNumber ?? 0, parsed.episodeNumber ?? 0)
         Button { selectedFile = file } label: {

@@ -148,7 +148,10 @@ final class PlaybackCoordinator: ObservableObject {
         player = next
         audioOptions = []; subtitleOptions = []; audioGroup = nil; subtitleGroup = nil
         Task { await loadMediaOptions(asset: asset, for: item, generation: requestGeneration) }
-        if position > 0 { next.seek(to: CMTime(seconds: position, preferredTimescale: 600)) }
+        if position > 0 {
+            // seek(to:) is async in tvOS 26+ SDK; dispatch to avoid blocking the calling context.
+            Task { await next.seek(to: CMTime(seconds: position, preferredTimescale: 600)) }
+        }
         next.play()
         diagnostics.record("开始播放请求：\(requestedFile.name)")
     }

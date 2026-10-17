@@ -9,6 +9,7 @@ struct FileBrowserScreen: View {
     private let accountID: String
     private let history: HistoryRepository?
     private let client: QuarkClient
+    private let diagnostics: Diagnostics
     let isMock: Bool
 
     init(client: QuarkClient, diagnostics: Diagnostics, isMock: Bool, accountID: String,
@@ -18,6 +19,7 @@ struct FileBrowserScreen: View {
         self.accountID = accountID
         self.history = history
         self.client = client
+        self.diagnostics = diagnostics
     }
 
     var body: some View {
@@ -84,7 +86,7 @@ struct FileBrowserScreen: View {
         .fullScreenCover(item: $selectedVideo) { file in
             if let history {
                 PlayerScreen(client: client, accountID: accountID, file: file,
-                             history: history, diagnostics: model.diagnostics)
+                             history: history, diagnostics: diagnostics)
             } else {
                 Text("无法创建本地观看记录数据库。")
             }

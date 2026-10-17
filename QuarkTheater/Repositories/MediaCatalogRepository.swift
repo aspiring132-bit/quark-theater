@@ -21,7 +21,10 @@ struct MediaScanDiff: Equatable {
 /// Stores only explicitly confirmed metadata, separated by account and cloud file.
 @MainActor
 final class MediaCatalogRepository {
-    private var database: OpaquePointer?
+    // nonisolated(unsafe): written only from init (before other references exist)
+    // and read only from deinit (after all references drop). All other accesses
+    // are on the main actor. Safe, but opted out of Swift 6 actor isolation checking.
+    nonisolated(unsafe) private var database: OpaquePointer?
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     init(url: URL) throws {
