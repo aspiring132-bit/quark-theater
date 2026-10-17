@@ -134,10 +134,15 @@ struct RootView: View {
                         } else {
                             LoginScreen(model: model)
                         }
-                    }.frame(maxWidth: 1500, alignment: .leading).padding(60)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(60)
                 }
-                .background(LinearGradient(colors: [Color(red: 0.035, green: 0.08, blue: 0.13), .black],
-                    startPoint: .topLeading, endPoint: .bottomTrailing))
+                .background(
+                    LinearGradient(colors: [Color(red: 0.035, green: 0.08, blue: 0.13), .black],
+                        startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .ignoresSafeArea()
+                )
             }
             .tabItem { Label("首页", systemImage: "house") }
             .tag(RootTab.home)

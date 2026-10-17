@@ -55,6 +55,7 @@ final class PlaybackCoordinator: ObservableObject {
         let duration = max(0, player.currentItem?.duration.seconds.isFinite == true ? player.currentItem!.duration.seconds : 0)
         let completed = duration > 0 && position >= duration * 0.95
         let record = WatchHistory(accountId: accountID, fileId: currentFile.fileId,
+            fileName: currentFile.name,
             positionSeconds: completed ? duration : position, durationSeconds: duration,
             lastWatchedAt: Date(), completed: completed)
         do { try history.save(record) }

@@ -3,8 +3,10 @@ import Foundation
 struct ScannedMediaCandidate: Identifiable, Equatable {
     let file: CloudFile
     let parsedName: ParsedMediaName
-    /// The immediate parent folder name (used for scraping context).
+    /// The immediate parent folder name (e.g. S01, S04).
     let parentFolderName: String?
+    /// The ancestor show folder name (e.g. "G 高堡奇人S01~S04"), if parent is just a season.
+    let ancestorFolderName: String?
     var id: String { file.fileId }
 }
 
@@ -19,8 +21,10 @@ final class MediaLibraryScanner {
         progress: @escaping (Int) -> Void = { _ in }
     ) async throws -> [ScannedMediaCandidate] {
         let initialFolders = folderIDs.isEmpty ? ["0"] : folderIDs
-        // Track (folderID, depth, parentFolderName)
-        var pending: [(id: String, depth: Int, folderName: String?)] = initialFolders.map { (id: $0, depth: 0, folderName: nil) }
+        // Track: (id, depth, parentFolderName, ancestorFolderName)
+        var pending: [(id: String, depth: Int, parent: String?, ancestor: String?)] = initialFolders.map {
+            (id: $0, depth: 0, parent: nil, ancestor: nil)
+        }
         var visited = Set<String>(initialFolders)
         var candidates: [ScannedMediaCandidate] = []
         var seenFiles = Set<String>()
@@ -41,16 +45,23 @@ final class MediaLibraryScanner {
                 for file in result.files where seenFiles.insert(file.fileId).inserted {
                     if file.isDirectory {
                         if visited.insert(file.fileId).inserted {
-                            // Pass this folder's own name as the parent context for its children
-                            pending.append((file.fileId, folder.depth + 1, file.name))
+                            // If current folder has a valid show name (not S01/S02 and not system tags), pass it as ancestor
+                            let currentIsSeason = file.name.range(of: #"^[Ss]\d+$"#, options: .regularExpression) != nil
+                            let ancestorForChild = currentIsSeason ? (folder.ancestor ?? folder.parent) : file.name
+                            pending.append((file.fileId, folder.depth + 1, file.name, ancestorForChild))
                         }
                     } else if file.isVideo {
-                        // Parse filename with parent folder context
-                        let parsed = FilenameParser.parse(file.name, parentFolderName: folder.folderName)
+                        // Effective show folder is ancestor if parent is just a season (e.g. S04)
+                        let effectiveFolder = (folder.parent?.range(of: #"^[Ss]\d+$"#, options: .regularExpression) != nil)
+                            ? (folder.ancestor ?? folder.parent)
+                            : folder.parent
+                        
+                        let parsed = FilenameParser.parse(file.name, parentFolderName: effectiveFolder)
                         candidates.append(ScannedMediaCandidate(
                             file: file,
                             parsedName: parsed,
-                            parentFolderName: folder.folderName
+                            parentFolderName: folder.parent,
+                            ancestorFolderName: folder.ancestor
                         ))
                     }
                     guard seenFiles.count <= maximumFiles else {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-private struct IdentifiableRematchTarget: Identifiable {
+struct RematchSheetTarget: Identifiable {
     let item: MediaItem
     let files: [CloudFile]
     var id: String { item.id }
@@ -25,7 +25,7 @@ struct MediaLibraryScreen: View {
     @State private var playlistQueue: [CloudFile] = []
 
     // Modals & sheets
-    @State private var rematchTarget: (MediaItem, [CloudFile])?
+    @State private var rematchTarget: RematchSheetTarget?
     @State private var matchCandidate: ScannedMediaCandidate?
     @State private var showFolderSelection = false
 
@@ -322,10 +322,7 @@ struct MediaLibraryScreen: View {
                 reloadConfirmed()
             }
         }
-        .sheet(item: Binding(
-            get: { rematchTarget.map { IdentifiableRematchTarget(item: $0.0, files: $0.1) } },
-            set: { rematchTarget = $0.map { ($0.item, $0.files) } }
-        )) { target in
+        .sheet(item: $rematchTarget) { target in
             TMDBMatchScreen(
                 item: target.item,
                 relatedFiles: target.files,
@@ -467,7 +464,7 @@ struct MediaLibraryScreen: View {
 
                         // Rematch Button
                         Button {
-                            rematchTarget = (item, episodes.map(\.1))
+                            rematchTarget = RematchSheetTarget(item: item, files: episodes.map(\.1))
                         } label: {
                             Label("重新匹配", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.headline)
@@ -619,7 +616,18 @@ struct MediaLibraryScreen: View {
 
     private func autoMatchUnmatched(silent: Bool = false) async {
         let unconfirmed = candidates.filter { !confirmedIDs.contains($0.file.fileId) }
-        guard !unconfirmed.isEmpty else { return }
+        guard !unconfirmed.isEmpty else {
+            if !silent { message = "当前所有文件均已完成匹配。" }
+            return
+        }
+
+        if !silent {
+            isScanning = true
+            message = nil
+        }
+        defer {
+            if !silent { isScanning = false }
+        }
 
         let groups = Dictionary(grouping: unconfirmed, by: { "\($0.parsedName.mediaType.rawValue):\($0.parsedName.title.lowercased())" })
         var matchedTitlesCount = 0
@@ -630,7 +638,7 @@ struct MediaLibraryScreen: View {
             groupIndex += 1
             guard let first = groupCandidates.first else { continue }
             if !silent {
-                statusProgress = "正在自动刮削 TMDB 海报：\(first.parsedName.title) (\(groupIndex)/\(totalGroups))…"
+                statusProgress = "正在自动刮削 TMDB：\(first.parsedName.title) (\(groupIndex)/\(totalGroups))…"
             }
 
             do {
@@ -639,7 +647,8 @@ struct MediaLibraryScreen: View {
                     first.parsedName,
                     apiReadToken: token,
                     language: scraperLanguage,
-                    parentFolderName: first.parentFolderName
+                    parentFolderName: first.parentFolderName,
+                    ancestorFolderName: first.ancestorFolderName
                 )
                 let ranked = MediaMatchScorer.rank(raw, for: first.parsedName)
 
@@ -671,7 +680,12 @@ struct MediaLibraryScreen: View {
 
         if matchedTitlesCount > 0 {
             reloadConfirmed()
+            if !silent {
+                message = "批量刮削完成：已成功匹配并入库 \(matchedTitlesCount) 部影视海报！"
+            }
             diagnostics.record("自动刮削完成：成功匹配 \(matchedTitlesCount) 部影视")
+        } else if !silent {
+            message = "批量刮削完成：未找到匹配度更高的海报，可点击单条“手动匹配 TMDB”输入关键字搜索。"
         }
     }
 

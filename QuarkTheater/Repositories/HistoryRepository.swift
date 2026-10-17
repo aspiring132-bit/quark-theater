@@ -33,7 +33,7 @@ final class HistoryRepository {
     // and read only from deinit (after all references drop). All other accesses
     // are on the main actor. Safe, but opted out of Swift 6 actor isolation checking.
     nonisolated(unsafe) private var database: OpaquePointer?
-    private static let schemaVersion = 1
+    private static let schemaVersion = 2
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     init(url: URL) throws {
@@ -72,9 +72,10 @@ final class HistoryRepository {
         try validate(history)
         let statement = try prepare("""
             INSERT INTO watch_history
-                (account_id, file_id, position_seconds, duration_seconds, last_watched_at, completed)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (account_id, file_id, file_name, position_seconds, duration_seconds, last_watched_at, completed)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id, file_id) DO UPDATE SET
+                file_name = coalesce(excluded.file_name, watch_history.file_name),
                 position_seconds = excluded.position_seconds,
                 duration_seconds = excluded.duration_seconds,
                 last_watched_at = excluded.last_watched_at,
@@ -83,10 +84,15 @@ final class HistoryRepository {
         defer { sqlite3_finalize(statement) }
         try bind(history.accountId, to: statement, at: 1)
         try bind(history.fileId, to: statement, at: 2)
-        try check(sqlite3_bind_double(statement, 3, history.positionSeconds), operation: "bind position")
-        try check(sqlite3_bind_double(statement, 4, history.durationSeconds), operation: "bind duration")
-        try check(sqlite3_bind_double(statement, 5, history.lastWatchedAt.timeIntervalSince1970), operation: "bind date")
-        try check(sqlite3_bind_int(statement, 6, history.completed ? 1 : 0), operation: "bind completed")
+        if let name = history.fileName {
+            try bind(name, to: statement, at: 3)
+        } else {
+            sqlite3_bind_null(statement, 3)
+        }
+        try check(sqlite3_bind_double(statement, 4, history.positionSeconds), operation: "bind position")
+        try check(sqlite3_bind_double(statement, 5, history.durationSeconds), operation: "bind duration")
+        try check(sqlite3_bind_double(statement, 6, history.lastWatchedAt.timeIntervalSince1970), operation: "bind date")
+        try check(sqlite3_bind_int(statement, 7, history.completed ? 1 : 0), operation: "bind completed")
         try finish(statement)
     }
 
@@ -94,7 +100,7 @@ final class HistoryRepository {
         try validateIdentifier(accountID)
         try validateIdentifier(fileID)
         let statement = try prepare("""
-            SELECT account_id, file_id, position_seconds, duration_seconds, last_watched_at, completed
+            SELECT account_id, file_id, position_seconds, duration_seconds, last_watched_at, completed, file_name
             FROM watch_history WHERE account_id = ? AND file_id = ?;
             """)
         defer { sqlite3_finalize(statement) }
@@ -111,7 +117,7 @@ final class HistoryRepository {
     func recent(accountID: String) throws -> [WatchHistory] {
         try validateIdentifier(accountID)
         let statement = try prepare("""
-            SELECT account_id, file_id, position_seconds, duration_seconds, last_watched_at, completed
+            SELECT account_id, file_id, position_seconds, duration_seconds, last_watched_at, completed, file_name
             FROM watch_history WHERE account_id = ?
             ORDER BY last_watched_at DESC, file_id ASC;
             """)
@@ -158,28 +164,42 @@ final class HistoryRepository {
         guard version <= Self.schemaVersion else {
             throw HistoryRepositoryError.unsupportedSchema(version)
         }
-        guard version == 0 else { return }
-        try execute("BEGIN IMMEDIATE;")
-        do {
-            try execute("""
-                CREATE TABLE IF NOT EXISTS watch_history (
-                    account_id TEXT NOT NULL CHECK(length(account_id) > 0),
-                    file_id TEXT NOT NULL CHECK(length(file_id) > 0),
-                    position_seconds REAL NOT NULL CHECK(position_seconds >= 0),
-                    duration_seconds REAL NOT NULL CHECK(duration_seconds >= 0),
-                    last_watched_at REAL NOT NULL,
-                    completed INTEGER NOT NULL CHECK(completed IN (0, 1)),
-                    PRIMARY KEY(account_id, file_id),
-                    CHECK(duration_seconds = 0 OR position_seconds <= duration_seconds)
-                );
-                CREATE INDEX IF NOT EXISTS watch_history_recent
-                    ON watch_history(account_id, last_watched_at DESC);
-                PRAGMA user_version = 1;
-                """)
-            try execute("COMMIT;")
-        } catch {
-            try? execute("ROLLBACK;")
-            throw error
+        if version == 0 {
+            try execute("BEGIN IMMEDIATE;")
+            do {
+                try execute("""
+                    CREATE TABLE IF NOT EXISTS watch_history (
+                        account_id TEXT NOT NULL CHECK(length(account_id) > 0),
+                        file_id TEXT NOT NULL CHECK(length(file_id) > 0),
+                        file_name TEXT,
+                        position_seconds REAL NOT NULL CHECK(position_seconds >= 0),
+                        duration_seconds REAL NOT NULL CHECK(duration_seconds >= 0),
+                        last_watched_at REAL NOT NULL,
+                        completed INTEGER NOT NULL CHECK(completed IN (0, 1)),
+                        PRIMARY KEY(account_id, file_id),
+                        CHECK(duration_seconds = 0 OR position_seconds <= duration_seconds)
+                    );
+                    CREATE INDEX IF NOT EXISTS watch_history_recent
+                        ON watch_history(account_id, last_watched_at DESC);
+                    PRAGMA user_version = 2;
+                    """)
+                try execute("COMMIT;")
+            } catch {
+                try? execute("ROLLBACK;")
+                throw error
+            }
+        } else if version == 1 {
+            try execute("BEGIN IMMEDIATE;")
+            do {
+                try execute("""
+                    ALTER TABLE watch_history ADD COLUMN file_name TEXT;
+                    PRAGMA user_version = 2;
+                    """)
+                try execute("COMMIT;")
+            } catch {
+                try? execute("ROLLBACK;")
+                throw error
+            }
         }
     }
 
@@ -213,9 +233,11 @@ final class HistoryRepository {
         }
         let completed = sqlite3_column_int(statement, 5)
         guard completed == 0 || completed == 1 else { throw HistoryRepositoryError.corruptRecord }
+        let fileName: String? = sqlite3_column_text(statement, 6).map { String(cString: $0) }
         let record = WatchHistory(
             accountId: String(cString: account),
             fileId: String(cString: file),
+            fileName: fileName,
             positionSeconds: sqlite3_column_double(statement, 2),
             durationSeconds: sqlite3_column_double(statement, 3),
             lastWatchedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),

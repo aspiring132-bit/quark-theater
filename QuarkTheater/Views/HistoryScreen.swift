@@ -15,12 +15,21 @@ struct HomeContinueWatchingView: View {
             if records.isEmpty { Text("还没有未看完的视频").foregroundStyle(.secondary) }
             ForEach(records.prefix(5)) { item in
                 Button {
-                    selectedFile = CloudFile(fileId: item.fileId, parentId: "0", name: item.fileId,
-                        size: 0, fileExtension: "", modifiedAt: nil, isDirectory: false)
+                    selectedFile = CloudFile(fileId: item.fileId, parentId: "0", name: item.displayName,
+                        size: 0, fileExtension: (item.displayName as NSString).pathExtension, modifiedAt: nil, isDirectory: false)
                 } label: {
                     HStack(spacing: 20) {
                         Image(systemName: "play.circle.fill").foregroundStyle(.cyan).font(.title2)
-                        Text(item.fileId).font(.headline)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.displayName)
+                                .font(.headline)
+                                .lineLimit(1)
+                            if item.fileName != nil {
+                                Text("ID: \(item.fileId.prefix(12))…")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         Spacer()
                         Text("\(Int(item.positionSeconds)) / \(Int(item.durationSeconds)) 秒").foregroundStyle(.secondary)
                     }.padding(14)
@@ -91,7 +100,9 @@ struct HistoryScreen: View {
                         Image(systemName: item.completed ? "checkmark.circle.fill" : "play.circle.fill")
                             .font(.title2).foregroundStyle(item.completed ? .green : .cyan)
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("文件 ID：\(item.fileId)").font(.headline)
+                            Text(item.displayName)
+                                .font(.headline)
+                                .lineLimit(1)
                             Text(item.completed ? "已看完" : "\(Int(item.positionSeconds)) / \(Int(item.durationSeconds)) 秒")
                                 .foregroundStyle(.secondary)
                             Text(item.lastWatchedAt, style: .date).font(.caption).foregroundStyle(.secondary)
@@ -99,8 +110,8 @@ struct HistoryScreen: View {
                         Spacer()
                         if !item.completed {
                             Button("继续观看") {
-                                selectedFile = CloudFile(fileId: item.fileId, parentId: "0", name: item.fileId,
-                                    size: 0, fileExtension: "", modifiedAt: nil, isDirectory: false)
+                                selectedFile = CloudFile(fileId: item.fileId, parentId: "0", name: item.displayName,
+                                    size: 0, fileExtension: (item.displayName as NSString).pathExtension, modifiedAt: nil, isDirectory: false)
                             }
                         }
                         Button("删除") { remove(item) }

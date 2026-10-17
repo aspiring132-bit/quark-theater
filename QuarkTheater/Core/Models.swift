@@ -68,12 +68,17 @@ struct Episode: Codable, Identifiable {
 struct WatchHistory: Codable, Equatable, Identifiable {
     let accountId: String
     let fileId: String
+    var fileName: String? = nil
     var positionSeconds: Double
     var durationSeconds: Double
     var lastWatchedAt: Date
     var completed: Bool
     // Length-delimited composition avoids ambiguities in arbitrary server identifiers.
     var id: String { "\(accountId.count):\(accountId)\(fileId)" }
+    var displayName: String {
+        if let fileName, !fileName.isEmpty { return fileName }
+        return fileId
+    }
 }
 
 // Ephemeral only: never write signed URLs/cookies into SQLite, preferences or logs.

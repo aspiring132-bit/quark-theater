@@ -34,16 +34,24 @@ enum TMDBError: Error, LocalizedError {
     }
 }
 
-/// Native TMDB scraper with multi-query fallback strategy.
-/// Query cascade for any given title:
-///   1. Primary title  → preferred language (zh-CN)
-///   2. Primary title  → English (en-US)  [if zh-CN returned nothing]
-///   3. Title without Chinese colon suffix (e.g. "蛛丝4" from "蛛丝4：焕然一新")
-///   4. Title without trailing numeric suffix (e.g. "蛛丝" from "蛛丝4")
-///   5. Raw parentFolderName (stripped of season markers) as a last resort
+/// Native TMDB scraper with homophone/alias resolution and multi-level query cascade.
 struct TMDBService {
     static let builtInAPIKey = "94487d9bbfda56096618e82f65d86377"
     private let session: URLSession
+
+    // Common copyrighted/homophone aliases used in cloud drive shares
+    private static let commonAliases: [String: String] = [
+        "蛛丝": "蜘蛛侠",
+        "蜘蛛": "蜘蛛侠",
+        "蛛网": "蜘蛛侠",
+        "高堡弃人": "高堡奇人",
+        "使女": "使女的故事",
+        "大西洋": "大西洋帝国",
+        "绝命": "绝命毒师",
+        "权游": "权力的游戏",
+        "绝命毒师": "绝命毒师",
+        "西部世界": "西部世界"
+    ]
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -53,40 +61,84 @@ struct TMDBService {
         _ parsed: ParsedMediaName,
         apiReadToken: String?,
         language: String? = nil,
-        parentFolderName: String? = nil
+        parentFolderName: String? = nil,
+        ancestorFolderName: String? = nil
     ) async throws -> [TMDBSearchResult] {
         let preferredLanguage = language ?? UserDefaults.standard.string(forKey: "scraperLanguage") ?? "zh-CN"
         let token = (apiReadToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveKey = token.isEmpty ? Self.builtInAPIKey : token
         let type = parsed.mediaType == .series ? "tv" : "movie"
 
-        // Build query cascade
-        var queryVariants: [String] = []
-        queryVariants.append(parsed.title)
-
-        // Variant: strip Chinese/full-width colon suffix  "蛛丝4：焕然一新" → "蛛丝4"
-        let colonStripped = colonStrip(parsed.title)
-        if colonStripped != parsed.title { queryVariants.append(colonStripped) }
-
-        // Variant: strip trailing number "蛛丝4" → "蛛丝"
-        let numStripped = trailingNumberStrip(colonStripped)
-        if numStripped != colonStripped && !numStripped.isEmpty { queryVariants.append(numStripped) }
-
-        // Variant: parent folder name (stripped) as a last-resort show title
-        if let folderTitle = FilenameParser.folderTitle(parentFolderName),
-           !queryVariants.contains(where: { $0.lowercased() == folderTitle.lowercased() }) {
-            queryVariants.append(folderTitle)
+        // Guard against bare number scraping like "(09)" or "9" with no series context
+        let isBareNumber = parsed.title.range(of: #"^\(?\d{1,3}\)?$"#, options: .regularExpression) != nil
+        if isBareNumber && (parentFolderName == nil || parentFolderName?.contains("来自：") == true) && ancestorFolderName == nil {
+            return [] // Refuse to match bare numbers to movies like "9号谋杀案"
         }
 
-        // Search with cascade: try each query in zh-CN first, then en-US
+        // Build query candidates cascade
+        var rawCandidates: [String] = []
+
+        // 1. Base title
+        if !isBareNumber {
+            rawCandidates.append(parsed.title)
+            let colonStripped = colonStrip(parsed.title)
+            if colonStripped != parsed.title { rawCandidates.append(colonStripped) }
+            let numStripped = trailingNumberStrip(colonStripped)
+            if numStripped != colonStripped && !numStripped.isEmpty { rawCandidates.append(numStripped) }
+        }
+
+        // 2. Add alias / homophone replacements (e.g. 蛛丝4 -> 蜘蛛侠4 -> 蜘蛛侠)
+        for (homophone, standard) in Self.commonAliases {
+            for cand in rawCandidates {
+                if cand.contains(homophone) {
+                    let replaced = cand.replacingOccurrences(of: homophone, with: standard)
+                    rawCandidates.append(replaced)
+                    rawCandidates.append(standard)
+                }
+            }
+        }
+
+        // 3. Parent / Ancestor Folder Titles (e.g. "G 高堡奇人S01~S04")
+        for folder in [ancestorFolderName, parentFolderName].compactMap({ $0 }) {
+            if !folder.contains("来自：") && !folder.contains("网盘") {
+                if let ft = FilenameParser.folderTitle(folder) {
+                    rawCandidates.append(ft)
+                    for (homophone, standard) in Self.commonAliases {
+                        if ft.contains(homophone) {
+                            rawCandidates.append(ft.replacingOccurrences(of: homophone, with: standard))
+                            rawCandidates.append(standard)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Deduplicate while preserving priority order
+        var seen = Set<String>()
+        var queryVariants: [String] = []
+        for c in rawCandidates {
+            let trimmed = c.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && trimmed.count > 1 && seen.insert(trimmed.lowercased()).inserted {
+                queryVariants.append(trimmed)
+            }
+        }
+
+        // 4. Perform search: try each query variant
         for query in queryVariants {
+            // First try preferred language (zh-CN)
             let zhResults = try await performSearch(title: query, type: type, key: effectiveKey, language: preferredLanguage)
             if !zhResults.isEmpty { return zhResults }
 
+            // If zh-CN returned nothing, try en-US
             if preferredLanguage.hasPrefix("zh") {
                 let enResults = try await performSearch(title: query, type: type, key: effectiveKey, language: "en-US")
                 if !enResults.isEmpty { return enResults }
             }
+
+            // Also try cross-type search if series failed on tv or movie failed on movie
+            let altType = (type == "tv") ? "movie" : "tv"
+            let altResults = try await performSearch(title: query, type: altType, key: effectiveKey, language: preferredLanguage)
+            if !altResults.isEmpty { return altResults }
         }
 
         return []
@@ -119,7 +171,6 @@ struct TMDBService {
 
     // MARK: - Title Normalisation Helpers
 
-    /// Strip content after a Chinese/full-width colon: "蛛丝4：焕然一新" → "蛛丝4"
     private func colonStrip(_ s: String) -> String {
         let colonChars = CharacterSet(charactersIn: "：:")
         if let r = s.rangeOfCharacter(from: colonChars) {
@@ -128,7 +179,6 @@ struct TMDBService {
         return s
     }
 
-    /// Strip trailing arabic/CJK digit: "蛛丝4" → "蛛丝", "Season2" → "Season"
     private func trailingNumberStrip(_ s: String) -> String {
         s.replacingOccurrences(of: #"\s*[0-9０-９]+$"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
