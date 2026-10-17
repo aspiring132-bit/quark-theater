@@ -220,10 +220,43 @@ final class LiveQuarkClient: QuarkClient {
         return CloudFilePage(files: files, page: page, pageSize: pageSize, total: total)
     }
 
-    /// Resolves a short-lived download URL on demand. The URL is not persisted as media data.
+    /// Resolves a short-lived dedicated video streaming or download URL on demand. The URL is not persisted as media data.
     func playbackResource(fileID: String) async throws -> PlaybackResource {
         guard account != nil else { throw QuarkError.authenticationRequired }
         guard !fileID.isEmpty, fileID != "0" else { throw QuarkError.invalidResponse("文件 ID 无效") }
+
+        // 1. Attempt Quark's dedicated video streaming endpoint (/file/v2/play)
+        // This routes through Quark's high-speed video CDN edge clusters (video-play-*-zb.drive.quark.cn),
+        // completely bypassing the 100 KB/s rate-limiting imposed on generic /file/download endpoints.
+        var playQuery = driveQuery()
+        playQuery.merge(["sys": "win32", "ve": "2.5.56"]) { _, new in new }
+        let playBody: [String: Any] = [
+            "fid": fileID,
+            "resolutions": "original,4k,2k,super,high,low",
+            "supports": "fmp4,hls,mp4"
+        ]
+
+        if let playResult = try? await request(Self.api + "/file/v2/play", query: playQuery, body: playBody),
+           let status = integer(playResult["status"]), status == 200,
+           let data = playResult["data"] as? [String: Any],
+           let videoList = data["video_list"] as? [[String: Any]], !videoList.isEmpty {
+            for item in videoList {
+                if let videoInfo = item["video_info"] as? [String: Any],
+                   let value = videoInfo["url"] as? String,
+                   let url = URL(string: value), url.scheme?.lowercased() == "https", url.host != nil,
+                   url.user == nil, url.password == nil {
+                    let resName = item["resolution"] as? String ?? "默认"
+                    let fmtName = videoInfo["format"] as? String ?? "流媒体"
+                    Self.logger.info("🎬 成功获取专属视频流直链: 分辨率 \(resName, privacy: .public), 格式 \(fmtName, privacy: .public)")
+                    return PlaybackResource(fileID: fileID, url: url, cookies: cookies,
+                                            requiredHTTPHeaders: ["User-Agent": Self.desktopUserAgent,
+                                                                  "Origin": "https://pan.quark.cn", "Referer": "https://pan.quark.cn/"],
+                                            expiresAt: nil)
+                }
+            }
+        }
+
+        // 2. Fallback to generic /file/download if v2/play is unavailable or file is not a playable video
         var query = driveQuery()
         query.merge(["sys": "win32", "ve": "2.5.56", "ut": "", "guid": ""]) { _, new in new }
         let result = try await request(Self.api + "/file/download", query: query, body: ["fids": [fileID]])
@@ -289,8 +322,8 @@ final class LiveQuarkClient: QuarkClient {
         let url = try buildURL(endpoint, query: query)
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = body == nil ? "GET" : "POST"
-        let isDownload = endpoint.hasSuffix("/download")
-        request.setValue(isDownload ? Self.desktopUserAgent : Self.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        let isDownloadOrPlay = endpoint.contains("/download") || endpoint.contains("/play")
+        request.setValue(isDownloadOrPlay ? Self.desktopUserAgent : Self.defaultUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")

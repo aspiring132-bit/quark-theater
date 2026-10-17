@@ -178,7 +178,6 @@ struct MediaLibraryScreen: View {
 
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 28), count: 5), spacing: 32) {
                             ForEach(posterItems) { item in
-                                let isCurrentFocused = focusedItem?.id == item.id
                                 Button {
                                     focusedItem = item
                                     let episodes = episodesFor(item: item)
