@@ -1,8 +1,10 @@
 import Foundation
+import os
 
 /// Native adapter for the pinned MIT QuarkPan contracts. See API-ADAPTER.md.
 @MainActor
 final class LiveQuarkClient: QuarkClient {
+    private static let logger = Logger(subsystem: "org.quarktheater.app", category: "QuarkClient")
     private let transport: any QuarkHTTPTransport
     private let credentialStore: any CredentialStore
     private let now: () -> Date
@@ -11,8 +13,8 @@ final class LiveQuarkClient: QuarkClient {
     private var activeChallenge: QRLoginChallenge?
     private var sessionGeneration = 0
     private static let api = "https://drive-pc.quark.cn/1/clouddrive"
-    private static let userAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.71 Safari/537.36 Core/1.94.225.400 QQBrowser/12.2.5544.400"
-    private static let loginUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+    private static let defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+    private static let desktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch"
     // A local waiting limit, not an asserted server QR validity period.
     static let localQRCodeTimeout: TimeInterval = 300
 
@@ -28,22 +30,53 @@ final class LiveQuarkClient: QuarkClient {
     }
 
     func restoreSession() async throws -> Account? {
-        guard let data = try credentialStore.load() else { return nil }
-        let stored: StoredQuarkSession
-        do { stored = try JSONDecoder().decode(StoredQuarkSession.self, from: data) }
-        catch { throw QuarkError.invalidResponse("安全凭据无法解码，请退出后重新登录") }
-        cookies = try stored.cookies().filter { $0.expiresDate.map { $0 > now() } ?? true }
-        guard !cookies.isEmpty else { try logout(); return nil }
+        var candidateCookies: [HTTPCookie] = []
+        var candidateAccount: Account? = nil
+
+        #if targetEnvironment(simulator)
+        let localPath = "/Users/wangbin/.quark_theater_session.json"
+        if FileManager.default.fileExists(atPath: localPath),
+           let raw = try? Data(contentsOf: URL(fileURLWithPath: localPath)),
+           let list = try? JSONDecoder().decode([StoredCookie].self, from: raw) {
+            candidateCookies = list.compactMap { $0.toHTTPCookie() }
+            candidateAccount = Account(accountId: "quark-local-account", displayName: "夸克账号", authenticationState: .authenticated)
+            Self.logger.info("📱 [Simulator] 成功从本地 ~/.quark_theater_session.json 加载 \(candidateCookies.count) 个 Cookie")
+        }
+        #endif
+
+        if candidateCookies.isEmpty, let data = try credentialStore.load() {
+            if let stored = try? JSONDecoder().decode(StoredQuarkSession.self, from: data) {
+                candidateCookies = (try? stored.cookies()) ?? []
+                candidateAccount = stored.account
+                Self.logger.info("🔐 从 Keychain 加载到 \(candidateCookies.count) 个 Cookie")
+            }
+        }
+
+        guard !candidateCookies.isEmpty, let acc = candidateAccount else {
+            Self.logger.info("ℹ️ 没有找到已保存的会话凭据")
+            return nil
+        }
+
+        cookies = candidateCookies.map { cookie in
+            var props = cookie.properties ?? [:]
+            props[.domain] = ".quark.cn"
+            props[.path] = "/"
+            return HTTPCookie(properties: props) ?? cookie
+        }
+
+        Self.logger.info("🔑 正在验证会话 (请求网盘根目录 /file/sort)...")
         do {
-            _ = try await fetchFiles(parentID: "0", page: 1, pageSize: 1)
-            account = stored.account
+            let page = try await fetchFiles(parentID: "0", page: 1, pageSize: 5)
+            account = acc
+            Self.logger.info("✅ 会话验证成功！根目录获取到 \(page.files.count) 个项目，总计 \(page.total ?? page.files.count)")
             try persistSession()
             return account
         } catch {
+            Self.logger.error("❌ 会话已失效: \(error.localizedDescription, privacy: .public)")
             account = nil
             if error as? QuarkError == .authenticationRequired {
                 cookies.removeAll()
-                try credentialStore.delete()
+                try? credentialStore.delete()
             }
             throw error
         }
@@ -111,7 +144,9 @@ final class LiveQuarkClient: QuarkClient {
     func cancelQRCodeLogin() {
         sessionGeneration &+= 1
         activeChallenge = nil
-        cookies.removeAll()
+        if account == nil {
+            cookies.removeAll()
+        }
     }
 
     func listFiles(parentID: String, page: Int, pageSize: Int) async throws -> CloudFilePage {
@@ -200,9 +235,8 @@ final class LiveQuarkClient: QuarkClient {
               url.user == nil, url.password == nil else {
             throw QuarkError.invalidResponse("没有匹配文件的 HTTPS download_url")
         }
-        // Keep scope attributes; never copy a whole Quark Cookie header to an arbitrary CDN host.
         return PlaybackResource(fileID: fileID, url: url, cookies: cookies,
-                                requiredHTTPHeaders: ["User-Agent": Self.userAgent,
+                                requiredHTTPHeaders: ["User-Agent": Self.desktopUserAgent,
                                                       "Origin": "https://pan.quark.cn", "Referer": "https://pan.quark.cn/"],
                                 expiresAt: nil)
     }
@@ -211,12 +245,27 @@ final class LiveQuarkClient: QuarkClient {
         sessionGeneration &+= 1
         defer { account = nil; cookies.removeAll(); activeChallenge = nil }
         try credentialStore.delete()
+        #if targetEnvironment(simulator)
+        let localPath = "/Users/wangbin/.quark_theater_session.json"
+        try? FileManager.default.removeItem(atPath: localPath)
+        #endif
+        Self.logger.info("🚪 已退出登录，清除会话凭据")
     }
 
     private func persistSession() throws {
         guard let account else { return }
-        let stored = try StoredQuarkSession(account: account, cookies: cookies)
+        let stored = StoredQuarkSession(account: account, cookies: cookies)
         try credentialStore.save(JSONEncoder().encode(stored))
+        #if targetEnvironment(simulator)
+        let localPath = "/Users/wangbin/.quark_theater_session.json"
+        let list = cookies.map { c in
+            StoredCookie(name: c.name, value: c.value, domain: c.domain, path: c.path,
+                         expires: c.expiresDate?.timeIntervalSince1970)
+        }
+        if let raw = try? JSONEncoder().encode(list) {
+            try? raw.write(to: URL(fileURLWithPath: localPath))
+        }
+        #endif
     }
 
     private func loginQuery() -> [String: String] {
@@ -240,28 +289,32 @@ final class LiveQuarkClient: QuarkClient {
         let url = try buildURL(endpoint, query: query)
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = body == nil ? "GET" : "POST"
-        let host = url.host?.lowercased()
-        let usesLoginAgent = host == "uop.quark.cn" || host == "pan.quark.cn"
-        request.setValue(usesLoginAgent ? Self.loginUserAgent : Self.userAgent, forHTTPHeaderField: "User-Agent")
-        if usesLoginAgent {
-            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-            request.setValue("no-cache", forHTTPHeaderField: "Pragma")
-        }
+        let isDownload = endpoint.hasSuffix("/download")
+        request.setValue(isDownload ? Self.desktopUserAgent : Self.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
         request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
         request.setValue("https://pan.quark.cn", forHTTPHeaderField: "Origin")
         request.setValue("https://pan.quark.cn/", forHTTPHeaderField: "Referer")
         request.httpShouldHandleCookies = false
-        let matching = cookies.filter { Self.cookie($0, matches: url, at: now()) }
-        if !matching.isEmpty {
-            HTTPCookie.requestHeaderFields(with: matching).forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+
+        // Exact Cookie header string formatting, matching the verified Python verifier
+        let cookiePairs = cookies.map { "\($0.name)=\($0.value)" }
+        if !cookiePairs.isEmpty {
+            request.setValue(cookiePairs.joined(separator: "; "), forHTTPHeaderField: "Cookie")
         }
+
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
+
+        Self.logger.info("📡 发送请求: \(endpoint, privacy: .public), Cookie 数量: \(self.cookies.count)")
         let (data, response) = try await transport.send(request)
         try ensureGeneration(generation)
+        Self.logger.info("📥 收到响应: HTTP \(response.statusCode) 来自 \(url.host ?? "", privacy: .public)")
+
         guard response.url?.host == url.host else { throw QuarkError.invalidResponse("接口重定向主机未验证") }
         switch response.statusCode {
         case 200...299: break
@@ -270,19 +323,26 @@ final class LiveQuarkClient: QuarkClient {
         case 429: throw QuarkError.rateLimited
         default: throw QuarkError.httpStatus(response.statusCode)
         }
+
+        // Capture incoming Set-Cookie headers
         let headers = response.allHeaderFields.reduce(into: [String: String]()) { result, pair in
             if let key = pair.key as? String, let value = pair.value as? String { result[key] = value }
         }
         let incoming = HTTPCookie.cookies(withResponseHeaderFields: headers, for: url)
+        var hasNewCookies = false
         for cookie in incoming {
-            let host = url.host?.lowercased() ?? ""
-            let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-            guard host == domain || host.hasSuffix("." + domain), domain == "quark.cn" || domain.hasSuffix(".quark.cn") else { continue }
-            cookies.removeAll { $0.name == cookie.name && $0.domain == cookie.domain && $0.path == cookie.path }
-            if cookie.expiresDate.map({ $0 > now() }) ?? true { cookies.append(cookie) }
+            var props = cookie.properties ?? [:]
+            props[.domain] = ".quark.cn"
+            props[.path] = "/"
+            let normalized = HTTPCookie(properties: props) ?? cookie
+            cookies.removeAll { $0.name == normalized.name }
+            cookies.append(normalized)
+            hasNewCookies = true
         }
-        cookies.removeAll { $0.expiresDate.map { $0 <= now() } ?? false }
-        if !incoming.isEmpty { try persistSession() }
+        if hasNewCookies {
+            try? persistSession()
+        }
+
         guard let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw QuarkError.invalidResponse("响应不是 JSON 对象")
         }
@@ -296,8 +356,18 @@ final class LiveQuarkClient: QuarkClient {
     static func cookie(_ cookie: HTTPCookie, matches url: URL, at now: Date) -> Bool {
         guard let host = url.host?.lowercased(), cookie.expiresDate.map({ $0 > now }) ?? true else { return false }
         if cookie.isSecure && url.scheme?.lowercased() != "https" { return false }
+        
+        let hostIsQuark = host == "quark.cn" || host.hasSuffix(".quark.cn")
         let domain = cookie.domain.lowercased()
-        let hostMatches = domain.hasPrefix(".") ? (host == String(domain.dropFirst()) || host.hasSuffix(domain)) : host == domain
+        let cookieIsQuark = domain.contains("quark.cn")
+        
+        // Any cookie issued by Quark (*.quark.cn) matches all Quark endpoints
+        if hostIsQuark && cookieIsQuark {
+            return true
+        }
+        
+        let clean = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
+        let hostMatches = host == clean || host.hasSuffix("." + clean)
         let path = url.path.isEmpty ? "/" : url.path
         let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
         let pathMatches = path == cookiePath || (path.hasPrefix(cookiePath) && (cookiePath.hasSuffix("/") || path.dropFirst(cookiePath.count).hasPrefix("/")))

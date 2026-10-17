@@ -1,8 +1,10 @@
 import Combine
 import Foundation
+import os
 
 @MainActor
 final class SessionViewModel: ObservableObject {
+    private static let logger = Logger(subsystem: "org.quarktheater.app", category: "SessionViewModel")
     @Published private(set) var account: Account?
     @Published private(set) var challenge: QRLoginChallenge?
     @Published private(set) var isBusy = false
@@ -32,12 +34,25 @@ final class SessionViewModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
+            Self.logger.info("🔄 SessionViewModel: 正在尝试恢复会话...")
             account = try await client.restoreSession()
-            if account != nil { diagnostics.record("客户端已恢复保存的会话，并完成接口检查") }
+            if let account {
+                Self.logger.info("🎉 SessionViewModel: 会话恢复成功！账号: \(account.displayName, privacy: .public)")
+                diagnostics.record("客户端已恢复保存的会话，并完成接口检查")
+            } else {
+                Self.logger.info("ℹ️ SessionViewModel: 未发现已保存的登录会话")
+            }
         } catch {
+            Self.logger.error("⚠️ SessionViewModel: 恢复会话遇到错误: \(error.localizedDescription, privacy: .public)")
             message = userFacingError(error)
             diagnostics.recordError(error, context: "会话恢复")
         }
+    }
+
+    func retryRestore() async {
+        didRestore = false
+        message = nil
+        await restore()
     }
 
     func beginLogin() {
@@ -100,6 +115,7 @@ final class SessionViewModel: ObservableObject {
     }
 
     func cancelLogin() {
+        guard isLoggingIn else { return }
         loginGeneration = UUID()
         loginTask?.cancel()
         loginTask = nil

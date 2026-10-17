@@ -23,10 +23,18 @@ struct LoginScreen: View {
                     ProgressView("等待手机确认")
                     Button("取消登录") { model.cancelLogin() }
                 } else {
-                    Button(model.isMock ? "进入 Mock 演示" : "生成登录二维码") {
-                        if model.isMock { model.enterMockDemo() } else { model.beginLogin() }
-                    }
+                    HStack(spacing: 20) {
+                        Button(model.isMock ? "进入 Mock 演示" : "生成登录二维码") {
+                            if model.isMock { model.enterMockDemo() } else { model.beginLogin() }
+                        }
                         .disabled(model.isBusy || model.client == nil)
+
+                        Button("恢复已保存会话") {
+                            Task { await model.retryRestore() }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isBusy || model.client == nil)
+                    }
                 }
                 Text("不会要求你在源码中填写个人 Cookie。").font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading)

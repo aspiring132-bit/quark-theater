@@ -67,13 +67,21 @@ final class PlaybackCoordinator: ObservableObject {
         retryTask = Task { await startRetryLoop() }
     }
 
+    @Published private(set) var selectedAudioIndex: Int?
+    @Published private(set) var selectedSubtitleIndex: Int?
+
+    var currentPlayingFile: CloudFile { currentFile }
+    var playlistQueue: [CloudFile] { queue }
+
     func selectAudio(_ index: Int) {
         guard audioOptions.indices.contains(index), let audioGroup else { return }
+        selectedAudioIndex = index
         player?.currentItem?.select(audioOptions[index], in: audioGroup)
     }
 
     func selectSubtitle(_ index: Int?) {
         guard let subtitleGroup else { return }
+        selectedSubtitleIndex = index
         if let index, subtitleOptions.indices.contains(index) {
             player?.currentItem?.select(subtitleOptions[index], in: subtitleGroup)
         } else {
@@ -86,23 +94,30 @@ final class PlaybackCoordinator: ObservableObject {
         return queue.indices.contains(index + 1)
     }
 
-    func playNext() {
-        guard let index = queue.firstIndex(where: { $0.fileId == currentFile.fileId }),
-              queue.indices.contains(index + 1) else { return }
+    func playFile(_ targetFile: CloudFile) {
+        guard targetFile.fileId != currentFile.fileId else { return }
         saveProgress()
         retryTask?.cancel()
         detachObservers()
         player?.pause()
         generation &+= 1
-        currentFile = queue[index + 1]
+        currentFile = targetFile
         restoredPosition = 0
         retriesUsed = 0
         message = nil
+        selectedAudioIndex = nil
+        selectedSubtitleIndex = nil
         retryTask = Task {
             do { try await resolveAndPlay(at: 0) }
             catch is CancellationError { return }
             catch { report(error) }
         }
+    }
+
+    func playNext() {
+        guard let index = queue.firstIndex(where: { $0.fileId == currentFile.fileId }),
+              queue.indices.contains(index + 1) else { return }
+        playFile(queue[index + 1])
     }
 
     func stop() {
@@ -164,6 +179,12 @@ final class PlaybackCoordinator: ObservableObject {
             audioGroup = audio; subtitleGroup = subtitles
             audioOptions = audio?.options ?? []
             subtitleOptions = subtitles?.options ?? []
+            if let audio, let currentAudio = item.currentMediaSelection.selectedMediaOption(in: audio) {
+                selectedAudioIndex = audio.options.firstIndex(of: currentAudio)
+            }
+            if let subtitles, let currentSub = item.currentMediaSelection.selectedMediaOption(in: subtitles) {
+                selectedSubtitleIndex = subtitles.options.firstIndex(of: currentSub)
+            }
         } catch {
             if !(error is CancellationError) {
                 diagnostics.record("音轨/字幕信息暂不可用（系统错误码 \((error as NSError).code)）")

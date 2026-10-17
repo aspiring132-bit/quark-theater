@@ -1,8 +1,10 @@
 import Combine
 import Foundation
+import os
 
 @MainActor
 final class FileBrowserViewModel: ObservableObject {
+    private static let logger = Logger(subsystem: "org.quarktheater.app", category: "FileBrowser")
     struct Folder { let id: String; let name: String }
     @Published private(set) var folders = [Folder(id: "0", name: "我的网盘")]
     @Published private(set) var files: [CloudFile] = []
@@ -60,6 +62,7 @@ final class FileBrowserViewModel: ObservableObject {
         }
         defer { isLoading = false }
         let requestedPage = page + 1
+        Self.logger.info("📂 FileBrowser: 正在加载目录 [\(self.folders.last?.name ?? "我的网盘", privacy: .public)] (ID: \(self.folders.last?.id ?? "0", privacy: .public)), 第 \(requestedPage) 页...")
         do {
             let result: CloudFilePage
             if let searchQuery {
@@ -78,10 +81,12 @@ final class FileBrowserViewModel: ObservableObject {
             if result.hasMore && unique.isEmpty {
                 errorMessage = "服务器重复返回同一页，已停止继续翻页；请刷新目录。"
             }
+            Self.logger.info("✅ FileBrowser: 加载完成，获取到 \(result.files.count) 项文件 (新增 \(unique.count) 项, 总计 \(self.files.count) 项)")
             diagnostics.record("文件列表第 \(page) 页：收到 \(result.files.count) 条，新增 \(unique.count) 条")
         } catch is CancellationError {
             return
         } catch {
+            Self.logger.error("❌ FileBrowser: 加载目录失败: \(error.localizedDescription, privacy: .public)")
             errorMessage = userFacingError(error)
             diagnostics.recordError(error, context: "文件列表")
         }

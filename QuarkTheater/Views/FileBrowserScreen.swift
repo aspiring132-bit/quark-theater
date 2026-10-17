@@ -6,6 +6,7 @@ struct FileBrowserScreen: View {
     @State private var showPlaybackNotice = false
     @State private var selectedVideo: CloudFile?
     @State private var searchText = ""
+    @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = false
     private let accountID: String
     private let history: HistoryRepository?
     private let client: QuarkClient
@@ -34,22 +35,41 @@ struct FileBrowserScreen: View {
                     }
                     Spacer()
                     if model.canGoBack {
-                        Button("上级目录") { Task { await model.back() } }.disabled(model.isLoading)
+                        Button("上级目录") { Task { await model.back() } }
+                            .buttonStyle(.bordered)
+                            .disabled(model.isLoading)
                     }
-                    Button("刷新") { Task { await model.reload() } }.disabled(model.isLoading)
+                    Button("刷新") { Task { await model.reload() } }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isLoading)
                 }
                 HStack(spacing: 16) {
                     TextField("搜索网盘文件名", text: $searchText).frame(maxWidth: 650)
-                    Button("搜索") { Task { await model.search(searchText) } }.disabled(model.isLoading)
+                    Button("搜索") { Task { await model.search(searchText) } }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isLoading)
                     if model.searchQuery != nil {
                         Button("清除搜索") { searchText = ""; Task { await model.clearSearch() } }
+                            .buttonStyle(.bordered)
                     }
                 }
                 if let error = model.errorMessage {
-                    Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            Task { await model.reload() }
+                        } label: {
+                            Label("重新加载网盘", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 }
                 if model.files.isEmpty, !model.isLoading, model.errorMessage == nil {
-                    Text("此目录暂无文件").foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("此目录暂无文件").foregroundStyle(.secondary)
+                        Button("刷新目录") { Task { await model.reload() } }
+                            .buttonStyle(.bordered)
+                    }
                 }
                 LazyVStack(spacing: 20) {
                     ForEach(model.files) { file in
@@ -68,7 +88,7 @@ struct FileBrowserScreen: View {
                                 Spacer()
                                 Image(systemName: file.isDirectory ? "chevron.right" : "info.circle")
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                        }.disabled(model.isLoading)
+                        }.buttonStyle(.bordered).disabled(model.isLoading)
                     }
                 }
                 if model.isLoading { ProgressView("正在读取目录") }
@@ -85,8 +105,15 @@ struct FileBrowserScreen: View {
         }
         .fullScreenCover(item: $selectedVideo) { file in
             if let history {
-                PlayerScreen(client: client, accountID: accountID, file: file,
-                             history: history, diagnostics: diagnostics)
+                PlayerScreen(
+                    client: client,
+                    accountID: accountID,
+                    file: file,
+                    queue: model.files.filter(\.isVideo),
+                    automaticallyPlayNext: autoPlayNextEpisode,
+                    history: history,
+                    diagnostics: diagnostics
+                )
             } else {
                 Text("无法创建本地观看记录数据库。")
             }

@@ -78,28 +78,54 @@ final class KeychainCredentialStore: CredentialStore {
     }
 }
 
+struct StoredCookie: Codable {
+    let name: String
+    let value: String
+    var domain: String?
+    var path: String?
+    var expires: Double?
+
+    func toHTTPCookie() -> HTTPCookie? {
+        var props: [HTTPCookiePropertyKey: Any] = [
+            .name: name,
+            .value: value,
+            .domain: domain ?? ".quark.cn",
+            .path: path ?? "/"
+        ]
+        if let expires, expires > 0 {
+            props[.expires] = Date(timeIntervalSince1970: expires)
+        }
+        return HTTPCookie(properties: props)
+    }
+}
+
 struct StoredQuarkSession: Codable {
     let account: Account
-    let cookiePropertyLists: [Data]
+    var cookiesList: [StoredCookie] = []
+    var cookiePropertyLists: [Data]? = nil
 
-    init(account: Account, cookies: [HTTPCookie]) throws {
+    init(account: Account, cookies: [HTTPCookie]) {
         self.account = account
-        cookiePropertyLists = try cookies.map { cookie in
-            guard let properties = cookie.properties else {
-                throw QuarkError.invalidResponse("Cookie 缺少属性")
-            }
-            let values = Dictionary(uniqueKeysWithValues: properties.map { ($0.key.rawValue, $0.value) })
-            return try PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
+        self.cookiesList = cookies.map { c in
+            StoredCookie(name: c.name, value: c.value, domain: c.domain, path: c.path,
+                         expires: c.expiresDate?.timeIntervalSince1970)
         }
+        self.cookiePropertyLists = nil
     }
 
     func cookies() throws -> [HTTPCookie] {
-        try cookiePropertyLists.map { data in
-            guard let values = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-                  let cookie = HTTPCookie(properties: Dictionary(uniqueKeysWithValues: values.map { (HTTPCookiePropertyKey($0.key), $0.value) })) else {
-                throw QuarkError.invalidResponse("已保存 Cookie 无法还原")
-            }
-            return cookie
+        if !cookiesList.isEmpty {
+            return cookiesList.compactMap { $0.toHTTPCookie() }
         }
+        if let cookiePropertyLists {
+            return try cookiePropertyLists.map { data in
+                guard let values = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+                      let cookie = HTTPCookie(properties: Dictionary(uniqueKeysWithValues: values.map { (HTTPCookiePropertyKey($0.key), $0.value) })) else {
+                    throw QuarkError.invalidResponse("已保存 Cookie 无法还原")
+                }
+                return cookie
+            }
+        }
+        return []
     }
 }

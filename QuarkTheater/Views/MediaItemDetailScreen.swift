@@ -8,10 +8,15 @@ struct MediaItemDetailScreen: View {
     let client: QuarkClient
     let accountID: String
     let history: HistoryRepository
+    let tokenStore: TMDBCredentialStore
     let catalog: MediaCatalogRepository
     let diagnostics: Diagnostics
+    var onRematched: () -> Void = {}
+
+    @Environment(\.dismiss) private var dismiss
     @State private var favoriteIDs = Set<String>()
     @State private var selectedFile: CloudFile?
+    @State private var showRematchSheet = false
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = false
 
     private var fileByID: [String: CloudFile] {
@@ -37,15 +42,31 @@ struct MediaItemDetailScreen: View {
                     VStack(alignment: .leading, spacing: 16) {
                         Text(item.title).font(.largeTitle.bold())
                         Text(item.year.map(String.init) ?? "年份未知").font(.title3).foregroundStyle(.secondary)
-                        if let rating = item.rating { Label(String(format: "%.1f / 10", rating), systemImage: "star.fill").foregroundStyle(.yellow) }
-                        if let overview = item.overview, !overview.isEmpty { Text(overview).font(.title3).fixedSize(horizontal: false, vertical: true) }
+                        if let rating = item.rating {
+                            Label(String(format: "%.1f / 10", rating), systemImage: "star.fill").foregroundStyle(.yellow)
+                        }
+                        if let overview = item.overview, !overview.isEmpty {
+                            Text(overview).font(.title3).fixedSize(horizontal: false, vertical: true)
+                        }
                         Text("匹配置信度：\(Int((item.matchConfidence ?? 0) * 100))% · TMDB ID \(item.tmdbId ?? 0)")
                             .foregroundStyle(.secondary)
-                        Button(favoriteIDs.isDisjoint(with: related.map(\.fileId)) ? "加入收藏" : "取消收藏") {
-                            setFavorite(favoriteIDs.isDisjoint(with: related.map(\.fileId)))
+
+                        HStack(spacing: 20) {
+                            Button(favoriteIDs.isDisjoint(with: related.map(\.fileId)) ? "加入收藏" : "取消收藏") {
+                                setFavorite(favoriteIDs.isDisjoint(with: related.map(\.fileId)))
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button {
+                                showRematchSheet = true
+                            } label: {
+                                Label("重新匹配 TMDB", systemImage: "arrow.triangle.2.circlepath")
+                            }
+                            .buttonStyle(.bordered)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
+
                 if item.mediaType == .series {
                     Text("分季分集").font(.title2.bold())
                     let seasons = Dictionary(grouping: episodes, by: { $0.2.seasonNumber ?? 0 })
@@ -72,6 +93,19 @@ struct MediaItemDetailScreen: View {
             PlayerScreen(client: client, accountID: accountID, file: file,
                          queue: episodes.map(\.1), automaticallyPlayNext: autoPlayNextEpisode,
                          history: history, diagnostics: diagnostics)
+        }
+        .sheet(isPresented: $showRematchSheet) {
+            TMDBMatchScreen(
+                item: item,
+                relatedFiles: episodes.map(\.1),
+                accountID: accountID,
+                tokenStore: tokenStore,
+                catalog: catalog,
+                diagnostics: diagnostics
+            ) {
+                onRematched()
+                dismiss()
+            }
         }
     }
 

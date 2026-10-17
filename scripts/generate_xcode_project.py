@@ -44,10 +44,15 @@ def generate() -> dict[Path, str]:
         relative = path.relative_to(ROOT).as_posix()
         source_refs[relative] = add("file:" + relative, "isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = " + quote(path.name) + '; sourceTree = "<group>";')
 
+    assets_dir = ROOT / "QuarkTheater" / "Assets.xcassets"
+    assets_ref = add("file:QuarkTheater/Assets.xcassets", 'isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>";') if assets_dir.exists() else None
+
     def source_group(directory: Path) -> str:
         children = []
         for entry in sorted(directory.iterdir(), key=lambda item: (item.is_file(), item.name)):
-            if entry.is_dir() and any(entry.rglob("*.swift")):
+            if entry.name == "Assets.xcassets" and assets_ref:
+                children.append(assets_ref)
+            elif entry.is_dir() and any(entry.rglob("*.swift")):
                 children.append(source_group(entry))
             elif entry.is_file() and entry.suffix == ".swift":
                 children.append(source_refs[entry.relative_to(ROOT).as_posix()])
@@ -68,7 +73,7 @@ def generate() -> dict[Path, str]:
     app_phases = [
         phase("app:sources", "PBXSourcesBuildPhase", [source_refs[p.relative_to(ROOT).as_posix()] for p in app_sources]),
         phase("app:frameworks", "PBXFrameworksBuildPhase", [sqlite_ref]),
-        phase("app:resources", "PBXResourcesBuildPhase", []),
+        phase("app:resources", "PBXResourcesBuildPhase", [assets_ref] if assets_ref else []),
     ]
     test_phases = [
         phase("test:sources", "PBXSourcesBuildPhase", [source_refs[p.relative_to(ROOT).as_posix()] for p in test_sources]),

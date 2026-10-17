@@ -35,6 +35,13 @@ final class TMDBCredentialStore {
         return value
     }
 
+    func effectiveToken() -> String {
+        if let custom = try? load(), !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return custom.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return TMDBService.builtInAPIKey
+    }
+
     func save(_ token: String) throws {
         let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { throw TMDBError.missingAPIKey }

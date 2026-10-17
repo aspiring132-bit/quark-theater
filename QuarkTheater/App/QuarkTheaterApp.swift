@@ -25,7 +25,9 @@ struct QuarkTheaterApp: App {
                     await model.restore()
                 }
                 .onChange(of: scenePhase) { phase in
-                    if phase == .background { model.cancelLogin() }
+                    if phase == .background, model.isLoggingIn {
+                        model.cancelLogin()
+                    }
                 }
         }
     }

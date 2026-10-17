@@ -11,9 +11,10 @@ final class MediaLibraryScanner {
     private let pageSize = 100
     private let maximumFiles = 50_000
 
-    func scan(client: QuarkClient, progress: @escaping (Int) -> Void = { _ in }) async throws -> [ScannedMediaCandidate] {
-        var pending = [(id: "0", depth: 0)]
-        var visited = Set<String>(["0"])
+    func scan(client: QuarkClient, folderIDs: [String] = [], progress: @escaping (Int) -> Void = { _ in }) async throws -> [ScannedMediaCandidate] {
+        let initialFolders = folderIDs.isEmpty ? ["0"] : folderIDs
+        var pending = initialFolders.map { (id: $0, depth: 0) }
+        var visited = Set<String>(initialFolders)
         var candidates: [ScannedMediaCandidate] = []
         var seenFiles = Set<String>()
         var cursor = 0
