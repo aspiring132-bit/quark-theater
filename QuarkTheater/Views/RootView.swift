@@ -17,8 +17,18 @@ struct RootView: View {
             NavigationStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 32) {
-                        Text("QUARK THEATER").font(.system(size: 60, weight: .bold, design: .rounded))
-                        Text("你的网盘，电视上的私人影院").font(.title2).foregroundStyle(.secondary)
+                        HStack(spacing: 28) {
+                            Image("AppLogo")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 88, height: 88)
+                                .shadow(color: Color(red: 0, green: 0.85, blue: 1.0).opacity(0.4), radius: 16, x: 0, y: 6)
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("QUARK THEATER").font(.system(size: 56, weight: .bold, design: .rounded))
+                                Text("你的网盘，电视上的私人影院").font(.title3).foregroundStyle(.secondary)
+                            }
+                        }
                         if model.isMock {
                             Label("MOCK · 模拟数据 · 未连接夸克", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
                         }
@@ -175,11 +185,21 @@ private struct SettingsScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
-                Text("设置").font(.largeTitle.bold())
+                HStack(spacing: 24) {
+                    Image("AppLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 72, height: 72)
+                        .shadow(color: Color(red: 0, green: 0.85, blue: 1.0).opacity(0.3), radius: 12, x: 0, y: 4)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("QUARK THEATER · 设置").font(.largeTitle.bold())
+                        Text("版本：\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0") · tvOS 原生私人影院")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
                 Text("账号：\(model.account?.displayName ?? "未登录")")
                 Text(model.isMock ? "运行模式：Mock（未连接真实服务）" : "运行模式：真实夸克接口")
-                Text("版本：\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")")
-                    .foregroundStyle(.secondary)
 
                 if let account = model.account {
                     Text("影视文件夹绑定").font(.title2.bold())

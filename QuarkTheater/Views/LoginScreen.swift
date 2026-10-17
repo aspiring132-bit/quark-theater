@@ -10,9 +10,11 @@ struct LoginScreen: View {
             if let challenge = model.challenge, !model.isMock {
                 QRCodeView(value: challenge.qrURL.absoluteString)
             } else {
-                Image(systemName: model.isMock ? "testtube.2" : "qrcode")
-                    .font(.system(size: 140)).frame(width: 360, height: 360)
-                    .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 24))
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 320, height: 320)
+                    .shadow(color: Color(red: 0, green: 0.85, blue: 1.0).opacity(0.35), radius: 24, x: 0, y: 8)
             }
             VStack(alignment: .leading, spacing: 24) {
                 Text(model.isMock ? "Mock 登录验证" : "连接夸克网盘").font(.title.bold())

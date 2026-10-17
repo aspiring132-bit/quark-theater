@@ -22,7 +22,7 @@ tests = scheme.findall(".//TestableReference")
 assert len(tests) == 1 and tests[0].get("skipped") == "NO", "Tests must be included"
 ET.parse(root / "QuarkTheater.xcodeproj/project.xcworkspace/contents.xcworkspacedata")
 config = (root / "Config/Shared.xcconfig").read_text(encoding="utf-8")
-for setting in ["TARGETED_DEVICE_FAMILY = 3", "TVOS_DEPLOYMENT_TARGET = 16.0", "SWIFT_VERSION = 5.0"]:
+for setting in ["TARGETED_DEVICE_FAMILY = 3", "TVOS_DEPLOYMENT_TARGET = 26.0", "SWIFT_VERSION = 6.0"]:
     assert setting in config, "Missing build setting: " + setting
 test_count = sum(len(re.findall(r"\bfunc test\w+\s*\(", p.read_text(encoding="utf-8"))) for p in (root / "QuarkTheaterTests").rglob("*.swift"))
 print(f"PASS: {len(definitions)} PBX objects; references, shared scheme, target settings and generation verified.")
