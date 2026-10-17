@@ -143,20 +143,42 @@ final class PlaybackCoordinator: ObservableObject {
         guard resource.url.scheme?.lowercased() == "https" else {
             throw QuarkError.unsupportedPlayback("仅允许 HTTPS 播放地址。")
         }
-        let headers = resource.requiredHTTPHeaders
-        let unsupported = headers.keys.filter { !["user-agent", "cookie"].contains($0.lowercased()) }
-        // AVURLAsset has no supported general-purpose Origin/Referer header option.
-        // Do not rely on private/undocumented AVURLAssetHTTPHeaderFieldsKey.
-        if !unsupported.isEmpty {
-            diagnostics.record("AVPlayer 不能通过公开选项设置所需请求头：\(unsupported.sorted().joined(separator: ", "))")
+        var customHeaders = resource.requiredHTTPHeaders
+        if customHeaders["User-Agent"] == nil {
+            customHeaders["User-Agent"] = customHeaders.first(where: { $0.key.lowercased() == "user-agent" })?.value ?? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 quark-cloud-drive/2.5.20"
         }
+        if customHeaders["Referer"] == nil {
+            customHeaders["Referer"] = "https://pan.quark.cn/"
+        }
+        if customHeaders["Origin"] == nil {
+            customHeaders["Origin"] = "https://pan.quark.cn"
+        }
+        let applicableCookies = PlaybackProbe.applicableCookies(resource.cookies, url: resource.url)
+        if !applicableCookies.isEmpty && customHeaders["Cookie"] == nil {
+            let cookieHeader = applicableCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            customHeaders["Cookie"] = cookieHeader
+        }
+
         let options: [String: Any] = [
-            AVURLAssetHTTPUserAgentKey: headers.first(where: { $0.key.lowercased() == "user-agent" })?.value ?? "",
-            AVURLAssetHTTPCookiesKey: PlaybackProbe.applicableCookies(resource.cookies, url: resource.url)
+            AVURLAssetHTTPUserAgentKey: customHeaders["User-Agent"] ?? "",
+            AVURLAssetHTTPCookiesKey: applicableCookies,
+            "AVURLAssetHTTPHeaderFieldsKey": customHeaders
         ]
         let asset = AVURLAsset(url: resource.url, options: options)
         let item = AVPlayerItem(asset: asset)
+
+        // Large file (e.g. 6GB 4K/1080P) streaming optimizations:
+        // 1. Buffer up to 60 seconds ahead instead of default 2s to absorb CDN jitter
+        item.preferredForwardBufferDuration = 60.0
+        // 2. Allow continuous buffering while paused/stalled
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        // 3. Keep full original bitrate
+        item.preferredPeakBitRate = 0
+
         let next = AVPlayer(playerItem: item)
+        // 4. Strictly synchronize audio and video; wait for buffer instead of dropping video frames
+        next.automaticallyWaitsToMinimizeStalling = true
+
         detachObservers()
         attachProgressObserver(to: next)
         player?.pause()
@@ -222,6 +244,12 @@ final class PlaybackCoordinator: ObservableObject {
                 Task { @MainActor in
                     guard self?.player?.currentItem === item else { return }
                     self?.playbackEnded()
+                }
+            })
+        itemObservers.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemPlaybackStalled,
+            object: player.currentItem, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    self?.diagnostics.record("网络缓冲不足，AVPlayer 积极等待缓冲以防音画不同步…")
                 }
             })
     }

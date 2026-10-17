@@ -1,17 +1,17 @@
 {
-  "layers" : [
+  "layers": [
     {
-      "filename" : "Back.imagestacklayer"
+      "filename": "Front.imagestacklayer"
     },
     {
-      "filename" : "Middle.imagestacklayer"
+      "filename": "Middle.imagestacklayer"
     },
     {
-      "filename" : "Front.imagestacklayer"
+      "filename": "Back.imagestacklayer"
     }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
+  "info": {
+    "author": "xcode",
+    "version": 1
   }
 }

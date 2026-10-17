@@ -15,7 +15,7 @@ struct FileBrowserScreen: View {
 
     init(client: QuarkClient, diagnostics: Diagnostics, isMock: Bool, accountID: String,
          history: HistoryRepository?) {
-        _model = StateObject(wrappedValue: FileBrowserViewModel(client: client, diagnostics: diagnostics))
+        _model = StateObject(wrappedValue: FileBrowserViewModel(client: client, diagnostics: diagnostics, accountID: accountID))
         self.isMock = isMock
         self.accountID = accountID
         self.history = history
@@ -43,6 +43,8 @@ struct FileBrowserScreen: View {
                         .buttonStyle(.bordered)
                         .disabled(model.isLoading)
                 }
+
+                boundFolderSwitcher
                 HStack(spacing: 16) {
                     TextField("搜索网盘文件名", text: $searchText).frame(maxWidth: 650)
                     Button("搜索") { Task { await model.search(searchText) } }
@@ -116,6 +118,36 @@ struct FileBrowserScreen: View {
                 )
             } else {
                 Text("无法创建本地观看记录数据库。")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var boundFolderSwitcher: some View {
+        let boundNames = BoundFolderStore.boundFolderNames(accountID: accountID)
+        if !boundNames.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    Text("快速切换:").font(.caption).foregroundStyle(.secondary)
+                    ForEach(boundNames.keys.sorted(), id: \.self) { fid in
+                        let name = boundNames[fid] ?? fid
+                        let isSelected = model.folders.last?.id == fid
+                        Button {
+                            Task { await model.switchToFolder(id: fid, name: name) }
+                        } label: {
+                            Label(name, systemImage: isSelected ? "folder.fill" : "folder")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(isSelected ? .cyan : nil)
+                    }
+                    Button {
+                        Task { await model.switchToFolder(id: "0", name: "全部网盘根目录") }
+                    } label: {
+                        Label("全盘根目录", systemImage: "externaldrive")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(model.folders.last?.id == "0" ? .cyan : nil)
+                }
             }
         }
     }

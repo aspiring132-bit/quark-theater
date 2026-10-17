@@ -1,7 +1,7 @@
 import SwiftUI
 
 private enum RootTab: String, Hashable, CaseIterable {
-    case home, files, media, history, settings, diagnostics
+    case media, files, history, home, settings, diagnostics
 }
 
 @MainActor
@@ -9,11 +9,71 @@ struct RootView: View {
     @ObservedObject var model: SessionViewModel
     let history: HistoryRepository?
     let mediaCatalog: MediaCatalogRepository?
-    @AppStorage("selectedTab") private var selectedTab: RootTab = .home
+    @AppStorage("selectedTab") private var selectedTab: RootTab = .media
     @State private var showFolderSelection = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
+            Group {
+                if let account = model.account, let client = model.client,
+                   let mediaCatalog, let history {
+                    MediaLibraryScreen(client: client, accountID: account.accountId,
+                        history: history, tokenStore: TMDBCredentialStore(),
+                        catalog: mediaCatalog, diagnostics: model.diagnostics)
+                        .id(account.accountId)
+                } else if model.account == nil {
+                    ScrollView {
+                        VStack(spacing: 32) {
+                            HStack(spacing: 24) {
+                                Image("AppLogo")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 80, height: 80)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("QUARK THEATER").font(.system(size: 44, weight: .bold, design: .rounded))
+                                    Text("登录夸克网盘，开启电视私人影院").font(.headline).foregroundStyle(.secondary)
+                                }
+                            }
+                            LoginScreen(model: model)
+                        }
+                        .frame(maxWidth: 1200)
+                        .padding(60)
+                    }
+                } else {
+                    VStack(spacing: 20) { Image(systemName: "film.stack").font(.system(size: 60)); Text("正在准备媒体库…") }
+                }
+            }
+            .tabItem { Label("媒体库", systemImage: "film.stack") }
+            .tag(RootTab.media)
+
+            Group {
+                if let account = model.account, let client = model.client {
+                    NavigationStack {
+                        FileBrowserScreen(client: client, diagnostics: model.diagnostics, isMock: model.isMock,
+                                          accountID: account.accountId, history: history)
+                    }.id(account.accountId)
+                } else {
+                    VStack(spacing: 24) {
+                        Image(systemName: "folder.badge.person.crop").font(.system(size: 72))
+                        Text("登录后浏览网盘").font(.title)
+                        Text("请前往媒体库使用夸克 App 扫码登录。").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .tabItem { Label("我的网盘", systemImage: "folder") }
+            .tag(RootTab.files)
+
+            Group {
+                if let account = model.account, let history, let client = model.client {
+                    HistoryScreen(repository: history, accountID: account.accountId, client: client,
+                                  diagnostics: model.diagnostics).id(account.accountId)
+                } else {
+                    VStack(spacing: 20) { Image(systemName: "clock.arrow.circlepath").font(.system(size: 60)); Text("登录后查看观看历史") }
+                }
+            }
+            .tabItem { Label("观看历史", systemImage: "clock") }
+            .tag(RootTab.history)
+
             NavigationStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 32) {
@@ -34,21 +94,20 @@ struct RootView: View {
                         }
                         if let account = model.account {
                             Label(account.displayName, systemImage: "person.crop.circle.badge.checkmark").font(.title2)
-                            Text("已登录。使用顶部“网盘”浏览文件，或在“媒体库”扫描影片。")
-                            Text("打开媒体库扫描影片，或在历史页继续观看上次进度。").foregroundStyle(.secondary)
+                            Text("已登录。媒体库已自动刮削海报并聚合电视剧集，点击即可全屏播放。").foregroundStyle(.secondary)
 
                             HStack(spacing: 24) {
                                 Button {
-                                    selectedTab = .files
+                                    selectedTab = .media
                                 } label: {
-                                    Label("进入我的网盘", systemImage: "folder.fill")
+                                    Label("进入影视媒体库", systemImage: "film.stack")
                                 }
                                 .buttonStyle(.borderedProminent)
 
                                 Button {
-                                    selectedTab = .media
+                                    selectedTab = .files
                                 } label: {
-                                    Label("媒体库", systemImage: "rectangle.stack.fill")
+                                    Label("浏览我的网盘", systemImage: "folder.fill")
                                 }
                                 .buttonStyle(.bordered)
 
@@ -60,31 +119,12 @@ struct RootView: View {
                                 }
                                 .buttonStyle(.bordered)
 
-                                Button {
-                                    selectedTab = .diagnostics
-                                } label: {
-                                    Label("系统诊断", systemImage: "waveform.path.ecg")
-                                }
-                                .buttonStyle(.bordered)
-
                                 Button(role: .destructive) {
                                     Task { await model.logout() }
                                 } label: {
                                     Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                                 }
                                 .buttonStyle(.bordered)
-                            }
-                            .navigationDestination(for: String.self) { destination in
-                                if destination == "files", let client = model.client {
-                                    FileBrowserScreen(client: client, diagnostics: model.diagnostics, isMock: model.isMock,
-                                                      accountID: account.accountId, history: history)
-                                } else if destination == "media", let client = model.client, let mediaCatalog, let history {
-                                    MediaLibraryScreen(client: client, accountID: account.accountId,
-                                                       history: history, tokenStore: TMDBCredentialStore(),
-                                                       catalog: mediaCatalog, diagnostics: model.diagnostics)
-                                } else if destination == "diagnostics" {
-                                    DiagnosticsScreen(diagnostics: model.diagnostics)
-                                }
                             }
 
                             if let client = model.client, let history {
@@ -102,48 +142,6 @@ struct RootView: View {
             .tabItem { Label("首页", systemImage: "house") }
             .tag(RootTab.home)
 
-            Group {
-                if let account = model.account, let client = model.client {
-                    NavigationStack {
-                        FileBrowserScreen(client: client, diagnostics: model.diagnostics, isMock: model.isMock,
-                                          accountID: account.accountId, history: history)
-                    }.id(account.accountId)
-                } else {
-                    VStack(spacing: 24) {
-                        Image(systemName: "folder.badge.person.crop").font(.system(size: 72))
-                        Text("登录后浏览网盘").font(.title)
-                        Text("请前往首页，使用夸克 App 扫码登录。").foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .tabItem { Label("网盘", systemImage: "folder") }
-            .tag(RootTab.files)
-
-            Group {
-                if let account = model.account, let client = model.client,
-                   let mediaCatalog, let history {
-                    MediaLibraryScreen(client: client, accountID: account.accountId,
-                        history: history, tokenStore: TMDBCredentialStore(),
-                        catalog: mediaCatalog, diagnostics: model.diagnostics)
-                        .id(account.accountId)
-                } else {
-                    VStack(spacing: 20) { Image(systemName: "film.stack").font(.system(size: 60)); Text("登录后扫描媒体库") }
-                }
-            }
-            .tabItem { Label("媒体库", systemImage: "rectangle.stack") }
-            .tag(RootTab.media)
-
-            Group {
-                if let account = model.account, let history, let client = model.client {
-                    HistoryScreen(repository: history, accountID: account.accountId, client: client,
-                                  diagnostics: model.diagnostics).id(account.accountId)
-                } else {
-                    VStack(spacing: 20) { Image(systemName: "clock.arrow.circlepath").font(.system(size: 60)); Text("登录后查看观看历史") }
-                }
-            }
-            .tabItem { Label("历史", systemImage: "clock") }
-            .tag(RootTab.history)
-
             SettingsScreen(model: model, history: history, mediaCatalog: mediaCatalog)
                 .tabItem { Label("设置", systemImage: "gearshape") }
                 .tag(RootTab.settings)
@@ -154,13 +152,19 @@ struct RootView: View {
         }
         .tint(.cyan)
         .task(id: model.account?.accountId) {
-            if let account = model.account, !BoundFolderStore.hasConfigured(accountID: account.accountId) {
-                showFolderSelection = true
+            if let account = model.account {
+                if !BoundFolderStore.hasConfigured(accountID: account.accountId) {
+                    showFolderSelection = true
+                } else {
+                    selectedTab = .media
+                }
             }
         }
         .sheet(isPresented: $showFolderSelection) {
             if let client = model.client, let account = model.account {
-                FolderSelectionScreen(client: client, accountID: account.accountId, diagnostics: model.diagnostics, isPresented: $showFolderSelection) {}
+                FolderSelectionScreen(client: client, accountID: account.accountId, diagnostics: model.diagnostics, isPresented: $showFolderSelection) {
+                    selectedTab = .media
+                }
             }
         }
     }

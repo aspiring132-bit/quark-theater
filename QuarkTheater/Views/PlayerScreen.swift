@@ -7,6 +7,7 @@ struct PlayerScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var showDrawer = false
+    @State private var showHintPill = true
     @State private var selectedDrawerTab: DrawerTab = .episodes
     @FocusState private var isDrawerFocused: Bool
 
@@ -70,11 +71,12 @@ struct PlayerScreen: View {
                 }
             }
 
-            // 2. Bottom Drawer Trigger Pill (shown when drawer is closed and video is loaded)
-            if !showDrawer && coordinator.player != nil {
+            // 2. Bottom Drawer Trigger Pill (shown when drawer is closed and video is loaded, auto fades after 3s)
+            if !showDrawer && coordinator.player != nil && showHintPill {
                 Button {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                         showDrawer = true
+                        showHintPill = false
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -93,6 +95,7 @@ struct PlayerScreen: View {
                 }
                 .buttonStyle(.borderless)
                 .padding(.bottom, 36)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
 
             // 3. Sliding Bottom Control Drawer
@@ -157,7 +160,14 @@ struct PlayerScreen: View {
                 .focused($isDrawerFocused)
             }
         }
-        .task { await coordinator.start() }
+        .task {
+            await coordinator.start()
+            // Auto-dismiss the hint pill after 3 seconds as requested
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            withAnimation(.easeOut(duration: 0.6)) {
+                showHintPill = false
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { coordinator.saveProgress() }
         }
@@ -166,6 +176,7 @@ struct PlayerScreen: View {
             if direction == .down && !showDrawer {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     showDrawer = true
+                    showHintPill = false
                 }
             } else if direction == .up && showDrawer {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {

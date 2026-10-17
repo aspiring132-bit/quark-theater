@@ -5,8 +5,8 @@ import os
 @MainActor
 final class FileBrowserViewModel: ObservableObject {
     private static let logger = Logger(subsystem: "org.quarktheater.app", category: "FileBrowser")
-    struct Folder { let id: String; let name: String }
-    @Published private(set) var folders = [Folder(id: "0", name: "我的网盘")]
+    struct Folder: Equatable { let id: String; let name: String }
+    @Published private(set) var folders: [Folder]
     @Published private(set) var files: [CloudFile] = []
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
@@ -15,15 +15,22 @@ final class FileBrowserViewModel: ObservableObject {
     @Published private(set) var searchQuery: String?
     private let client: QuarkClient
     private let diagnostics: Diagnostics
+    private let accountID: String
     private var page = 0
     private let pageSize = 50
 
     var title: String { folders.last?.name ?? "我的网盘" }
     var canGoBack: Bool { folders.count > 1 }
 
-    init(client: QuarkClient, diagnostics: Diagnostics) {
+    init(client: QuarkClient, diagnostics: Diagnostics, accountID: String = "") {
         self.client = client
         self.diagnostics = diagnostics
+        self.accountID = accountID
+        if !accountID.isEmpty, let active = BoundFolderStore.activeFolder(accountID: accountID) {
+            self.folders = [Folder(id: active.id, name: active.name)]
+        } else {
+            self.folders = [Folder(id: "0", name: "我的网盘")]
+        }
     }
 
     func reload() async { await load(reset: true) }
@@ -41,12 +48,26 @@ final class FileBrowserViewModel: ObservableObject {
     func open(_ file: CloudFile) async {
         guard file.isDirectory, !isLoading else { return }
         folders.append(Folder(id: file.fileId, name: file.name))
+        if !accountID.isEmpty {
+            BoundFolderStore.setActiveFolder(id: file.fileId, name: file.name, accountID: accountID)
+        }
         await load(reset: true)
     }
 
     func back() async {
         guard canGoBack, !isLoading else { return }
         folders.removeLast()
+        if !accountID.isEmpty, let current = folders.last {
+            BoundFolderStore.setActiveFolder(id: current.id, name: current.name, accountID: accountID)
+        }
+        await load(reset: true)
+    }
+
+    func switchToFolder(id: String, name: String) async {
+        folders = [Folder(id: id, name: name)]
+        if !accountID.isEmpty {
+            BoundFolderStore.setActiveFolder(id: id, name: name, accountID: accountID)
+        }
         await load(reset: true)
     }
 
@@ -62,13 +83,14 @@ final class FileBrowserViewModel: ObservableObject {
         }
         defer { isLoading = false }
         let requestedPage = page + 1
-        Self.logger.info("📂 FileBrowser: 正在加载目录 [\(self.folders.last?.name ?? "我的网盘", privacy: .public)] (ID: \(self.folders.last?.id ?? "0", privacy: .public)), 第 \(requestedPage) 页...")
+        let currentFolder = folders.last ?? Folder(id: "0", name: "我的网盘")
+        Self.logger.info("📂 FileBrowser: 正在加载目录 [\(currentFolder.name, privacy: .public)] (ID: \(currentFolder.id, privacy: .public)), 第 \(requestedPage) 页...")
         do {
             let result: CloudFilePage
             if let searchQuery {
                 result = try await client.searchFiles(query: searchQuery, page: requestedPage, pageSize: pageSize)
             } else {
-                result = try await client.listFiles(parentID: folders.last?.id ?? "0",
+                result = try await client.listFiles(parentID: currentFolder.id,
                     page: requestedPage, pageSize: pageSize)
             }
             try Task.checkCancellation()

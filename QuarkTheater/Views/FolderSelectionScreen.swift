@@ -38,8 +38,8 @@ struct FolderSelectionScreen: View {
                     Button {
                         saveAndDismiss()
                     } label: {
-                        Label(selectedFolderIDs.isEmpty ? "跳过 (默认扫描全盘)" : "确认绑定 (\(selectedFolderIDs.count) 个文件夹)",
-                              systemImage: "checkmark.circle.fill")
+                        Label(selectedFolderIDs.isEmpty ? "进入媒体库 (全盘扫描)" : "确认绑定并进入媒体库 (\(selectedFolderIDs.count) 个文件夹)",
+                              systemImage: "film.stack")
                             .font(.headline)
                     }
                     .buttonStyle(.borderedProminent)
