@@ -14,11 +14,15 @@ struct MediaLibraryScreen: View {
     let tokenStore: TMDBCredentialStore
     let catalog: MediaCatalogRepository
     let diagnostics: Diagnostics
+    @Binding var isDockHidden: Bool
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var candidates: [ScannedMediaCandidate] = []
     @State private var confirmed: [MediaItem] = []
     @State private var focusedItem: MediaItem?
     @FocusState private var focusedPosterID: String?
+    @FocusState private var isHeroFocused: Bool
+    @FocusState private var isFilterFocused: Bool
 
     // Selected item for full Netflix/Apple TV style MediaItemDetailScreen
     @State private var selectedDetailItem: MediaItem?
@@ -122,6 +126,7 @@ struct MediaLibraryScreen: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(category == tag ? .cyan : .clear)
+                            .focused($isFilterFocused)
                         }
                     }
 
@@ -140,6 +145,7 @@ struct MediaLibraryScreen: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(sortMode == tag ? .cyan : .clear)
+                            .focused($isFilterFocused)
                         }
                     }
 
@@ -332,20 +338,63 @@ struct MediaLibraryScreen: View {
             .padding(.bottom, 60)
         }
         .ignoresSafeArea(edges: .top)
-        .task {
-            reloadConfirmed()
-            if candidates.isEmpty {
-                Task { await scan(silent: true) }
+        .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
+            geometry.contentOffset.y
+        }) { _, newOffset in
+            let shouldHide = newOffset > 60
+            if isDockHidden != shouldHide {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isDockHidden = shouldHide
+                }
             }
         }
-        .onDisappear { scanTask?.cancel() }
+        .onChange(of: isHeroFocused) { _, isFocused in
+            if isFocused {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isDockHidden = false
+                }
+            }
+        }
+        .onChange(of: isFilterFocused) { _, isFocused in
+            if isFocused {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isDockHidden = true
+                }
+            }
+        }
         .onChange(of: focusedPosterID) { _, newID in
             if let newID, let match = posterItems.first(where: { $0.id == newID }) {
                 withAnimation(.easeInOut(duration: 0.25)) {
                     focusedItem = match
                 }
             }
+            if newID != nil {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isDockHidden = true
+                }
+            }
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                Task {
+                    await scan(silent: true)
+                }
+            }
+        }
+        .task {
+            reloadConfirmed()
+            if candidates.isEmpty {
+                Task { await scan(silent: true) }
+            }
+            // Periodic background sync: every 15 minutes, silently check for new cloud files
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
+                if !Task.isCancelled {
+                    await scan(silent: true)
+                }
+            }
+        }
+        .onDisappear { scanTask?.cancel() }
         .fullScreenCover(item: $selectedDetailItem) { detailItem in
             let related = confirmed.filter { $0.tmdbId == detailItem.tmdbId && $0.mediaType == detailItem.mediaType }
             MediaItemDetailScreen(
@@ -406,6 +455,7 @@ struct MediaLibraryScreen: View {
                 Task { await scan() }
             }
         }
+        .ignoresSafeArea(edges: .top)
     }
 
     // MARK: - Hero Showcase Billboard View
@@ -414,16 +464,16 @@ struct MediaLibraryScreen: View {
         let episodes = episodesFor(item: item)
 
         ZStack(alignment: .bottomLeading) {
-            // Backdrop Image with cinematic dark gradient wash extending to top
+            // Backdrop Image filling 100% of the hero container from the very top (Y=0)
             backdropView(item.backdropPath ?? item.posterPath)
-                .frame(maxWidth: .infinity, maxHeight: 580)
+                .aspectRatio(contentMode: .fill)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .overlay(
                     LinearGradient(
                         stops: [
-                            .init(color: .black.opacity(0.85), location: 0),
-                            .init(color: .black.opacity(0.4), location: 0.22),
-                            .init(color: .clear, location: 0.45),
+                            .init(color: .black.opacity(0.25), location: 0),
+                            .init(color: .clear, location: 0.28),
                             .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.7), location: 0.75),
                             .init(color: Color(red: 0.04, green: 0.06, blue: 0.09), location: 1.0)
                         ],
@@ -434,8 +484,8 @@ struct MediaLibraryScreen: View {
                 .overlay(
                     LinearGradient(
                         stops: [
-                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.95), location: 0),
-                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.6), location: 0.55),
+                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.92), location: 0),
+                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.55), location: 0.55),
                             .init(color: .clear, location: 1.0)
                         ],
                         startPoint: .leading,
@@ -526,6 +576,7 @@ struct MediaLibraryScreen: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.cyan)
+                        .focused($isHeroFocused)
 
                         // 1-Click Quick Play
                         Button {
@@ -544,6 +595,7 @@ struct MediaLibraryScreen: View {
                             .padding(.vertical, 12)
                         }
                         .buttonStyle(.bordered)
+                        .focused($isHeroFocused)
 
                         // Rematch Button
                         Button {
@@ -556,6 +608,7 @@ struct MediaLibraryScreen: View {
                                 .padding(.vertical, 12)
                         }
                         .buttonStyle(.bordered)
+                        .focused($isHeroFocused)
                     }
 
                     // MARK: - Direct Episode Rail for Series (选集速播轨)
@@ -591,6 +644,7 @@ struct MediaLibraryScreen: View {
                                             )
                                         }
                                         .buttonStyle(.borderless)
+                                        .focused($isHeroFocused)
                                     }
                                 }
                                 .padding(.vertical, 4)
@@ -608,11 +662,12 @@ struct MediaLibraryScreen: View {
                     .frame(width: 240)
                     .shadow(color: .black.opacity(0.6), radius: 20, x: 0, y: 10)
             }
-            .padding(.top, 110)
+            .padding(.top, 120)
             .padding(.horizontal, 60)
             .padding(.bottom, 36)
         }
-        .frame(minHeight: 600)
+        .frame(height: 700)
+        .clipped()
     }
 
     // MARK: - Backdrop View

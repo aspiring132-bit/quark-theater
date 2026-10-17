@@ -2,6 +2,22 @@ import SwiftUI
 
 private enum RootTab: String, Hashable, CaseIterable {
     case media, sources, settings
+
+    var title: String {
+        switch self {
+        case .media: return "影院"
+        case .sources: return "网盘管理"
+        case .settings: return "设置"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .media: return "film.stack"
+        case .sources: return "externaldrive.connected.to.line.below"
+        case .settings: return "gearshape"
+        }
+    }
 }
 
 @MainActor
@@ -11,78 +27,37 @@ struct RootView: View {
     let mediaCatalog: MediaCatalogRepository?
     @AppStorage("selectedTab") private var selectedTab: RootTab = .media
     @State private var showFolderSelection = false
+    @State private var isDockHidden = false
+    @FocusState private var focusedDockTab: RootTab?
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            // MARK: - 1. Cinema / Media Library
+        ZStack(alignment: .top) {
+            Color(red: 0.04, green: 0.06, blue: 0.09)
+                .ignoresSafeArea()
+
+            // MARK: - 1. Screen Contents (Extends completely to Y=0 top edge)
             Group {
-                if let account = model.account, let client = model.client,
-                   let mediaCatalog, let history {
-                    MediaLibraryScreen(client: client, accountID: account.accountId,
-                        history: history, tokenStore: TMDBCredentialStore(),
-                        catalog: mediaCatalog, diagnostics: model.diagnostics)
-                        .id(account.accountId)
-                } else if model.account == nil {
-                    ScrollView {
-                        VStack(spacing: 32) {
-                            HStack(spacing: 24) {
-                                Image("AppLogo")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 80, height: 80)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("QUARK THEATER").font(.system(size: 44, weight: .bold, design: .rounded))
-                                    Text("登录夸克网盘，开启电视私人影院").font(.headline).foregroundStyle(.secondary)
-                                }
-                            }
-                            LoginScreen(model: model)
-                        }
-                        .frame(maxWidth: 1200)
-                        .padding(60)
-                    }
-                } else {
-                    VStack(spacing: 20) {
-                        ProgressView().scaleEffect(1.6)
-                        Text("正在准备私人影院媒体库…")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
+                switch selectedTab {
+                case .media:
+                    cinemaTab
+                case .sources:
+                    sourcesTab
+                case .settings:
+                    SettingsScreen(model: model, history: history, mediaCatalog: mediaCatalog)
+                        .padding(.top, 110)
                 }
             }
-            .tabItem { Label("影院", systemImage: "film.stack") }
-            .tag(RootTab.media)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // MARK: - 2. Sources Management & Cloud File Browser
-            Group {
-                if let account = model.account, let client = model.client {
-                    NavigationStack {
-                        SourcesManagementScreen(
-                            model: model,
-                            client: client,
-                            accountID: account.accountId,
-                            history: history,
-                            showFolderSelection: $showFolderSelection
-                        )
-                    }
-                    .id(account.accountId)
-                } else {
-                    VStack(spacing: 24) {
-                        Image(systemName: "folder.badge.person.crop").font(.system(size: 72))
-                        Text("登录后管理网盘").font(.title)
-                        Text("请前往影院使用夸克 App 扫码登录。").foregroundStyle(.secondary)
-                    }
-                }
+            // MARK: - 2. True Floating Frosted Glass Dock Bar
+            if model.account != nil {
+                floatingDockBar
             }
-            .tabItem { Label("网盘管理", systemImage: "externaldrive.connected.to.line.below") }
-            .tag(RootTab.sources)
-
-            // MARK: - 3. Settings & Diagnostics
-            SettingsScreen(model: model, history: history, mediaCatalog: mediaCatalog)
-                .tabItem { Label("设置", systemImage: "gearshape") }
-                .tag(RootTab.settings)
         }
-        .tint(.cyan)
         .ignoresSafeArea()
+        .onChange(of: selectedTab) { _, _ in
+            isDockHidden = false
+        }
         .task(id: model.account?.accountId) {
             if let account = model.account {
                 if !BoundFolderStore.hasConfigured(accountID: account.accountId) {
@@ -96,6 +71,116 @@ struct RootView: View {
                     selectedTab = .media
                 }
             }
+        }
+    }
+
+    // MARK: - Floating Dock Bar
+    private var floatingDockBar: some View {
+        HStack(spacing: 8) {
+            ForEach(RootTab.allCases, id: \.self) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: tab.icon)
+                        Text(tab.title)
+                            .font(.headline)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(selectedTab == tab ? .black : .white)
+                    .background(
+                        selectedTab == tab ? Color.white : Color.clear,
+                        in: Capsule()
+                    )
+                }
+                .buttonStyle(.plain)
+                .focused($focusedDockTab, equals: tab)
+                .scaleEffect(focusedDockTab == tab ? 1.08 : 1.0)
+                .animation(.easeOut(duration: 0.18), value: focusedDockTab)
+            }
+        }
+        .padding(6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 12)
+        .padding(.top, 36)
+        .offset(y: (isDockHidden && focusedDockTab == nil) ? -140 : 0)
+        .opacity((isDockHidden && focusedDockTab == nil) ? 0 : 1)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isDockHidden)
+    }
+
+    // MARK: - Cinema Tab
+    @ViewBuilder
+    private var cinemaTab: some View {
+        if let account = model.account, let client = model.client,
+           let mediaCatalog, let history {
+            MediaLibraryScreen(
+                client: client,
+                accountID: account.accountId,
+                history: history,
+                tokenStore: TMDBCredentialStore(),
+                catalog: mediaCatalog,
+                diagnostics: model.diagnostics,
+                isDockHidden: $isDockHidden
+            )
+            .id(account.accountId)
+            .ignoresSafeArea(edges: .top)
+        } else if model.account == nil {
+            ScrollView {
+                VStack(spacing: 32) {
+                    HStack(spacing: 24) {
+                        Image("AppLogo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 80, height: 80)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("QUARK THEATER").font(.system(size: 44, weight: .bold, design: .rounded))
+                            Text("登录夸克网盘，开启电视私人影院").font(.headline).foregroundStyle(.secondary)
+                        }
+                    }
+                    LoginScreen(model: model)
+                }
+                .frame(maxWidth: 1200)
+                .padding(60)
+            }
+        } else {
+            VStack(spacing: 20) {
+                ProgressView().scaleEffect(1.6)
+                Text("正在准备私人影院媒体库…")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Sources Tab
+    @ViewBuilder
+    private var sourcesTab: some View {
+        if let account = model.account, let client = model.client {
+            NavigationStack {
+                SourcesManagementScreen(
+                    model: model,
+                    client: client,
+                    accountID: account.accountId,
+                    history: history,
+                    showFolderSelection: $showFolderSelection
+                )
+            }
+            .id(account.accountId)
+            .padding(.top, 100)
+        } else {
+            VStack(spacing: 24) {
+                Image(systemName: "folder.badge.person.crop").font(.system(size: 72))
+                Text("登录后管理网盘").font(.title)
+                Text("请前往影院使用夸克 App 扫码登录。").foregroundStyle(.secondary)
+            }
+            .padding(.top, 120)
         }
     }
 }
