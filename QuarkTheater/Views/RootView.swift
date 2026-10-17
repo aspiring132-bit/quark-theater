@@ -1,7 +1,7 @@
 import SwiftUI
 
 private enum RootTab: String, Hashable, CaseIterable {
-    case media, files, history, home, settings, diagnostics
+    case media, sources, settings
 }
 
 @MainActor
@@ -14,6 +14,7 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
+            // MARK: - 1. Cinema / Media Library
             Group {
                 if let account = model.account, let client = model.client,
                    let mediaCatalog, let history {
@@ -40,128 +41,52 @@ struct RootView: View {
                         .padding(60)
                     }
                 } else {
-                    VStack(spacing: 20) { Image(systemName: "film.stack").font(.system(size: 60)); Text("正在准备媒体库…") }
+                    VStack(spacing: 20) {
+                        ProgressView().scaleEffect(1.6)
+                        Text("正在准备私人影院媒体库…")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            .tabItem { Label("媒体库", systemImage: "film.stack") }
+            .tabItem { Label("影院", systemImage: "film.stack") }
             .tag(RootTab.media)
 
+            // MARK: - 2. Sources Management & Cloud File Browser
             Group {
                 if let account = model.account, let client = model.client {
                     NavigationStack {
-                        FileBrowserScreen(client: client, diagnostics: model.diagnostics, isMock: model.isMock,
-                                          accountID: account.accountId, history: history)
-                    }.id(account.accountId)
+                        SourcesManagementScreen(
+                            model: model,
+                            client: client,
+                            accountID: account.accountId,
+                            history: history,
+                            showFolderSelection: $showFolderSelection
+                        )
+                    }
+                    .id(account.accountId)
                 } else {
                     VStack(spacing: 24) {
                         Image(systemName: "folder.badge.person.crop").font(.system(size: 72))
-                        Text("登录后浏览网盘").font(.title)
-                        Text("请前往媒体库使用夸克 App 扫码登录。").foregroundStyle(.secondary)
+                        Text("登录后管理网盘").font(.title)
+                        Text("请前往影院使用夸克 App 扫码登录。").foregroundStyle(.secondary)
                     }
                 }
             }
-            .tabItem { Label("我的网盘", systemImage: "folder") }
-            .tag(RootTab.files)
+            .tabItem { Label("网盘管理", systemImage: "externaldrive.connected.to.line.below") }
+            .tag(RootTab.sources)
 
-            Group {
-                if let account = model.account, let history, let client = model.client {
-                    HistoryScreen(repository: history, accountID: account.accountId, client: client,
-                                  diagnostics: model.diagnostics).id(account.accountId)
-                } else {
-                    VStack(spacing: 20) { Image(systemName: "clock.arrow.circlepath").font(.system(size: 60)); Text("登录后查看观看历史") }
-                }
-            }
-            .tabItem { Label("观看历史", systemImage: "clock") }
-            .tag(RootTab.history)
-
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 32) {
-                        HStack(spacing: 28) {
-                            Image("AppLogo")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 88, height: 88)
-                                .shadow(color: Color(red: 0, green: 0.85, blue: 1.0).opacity(0.4), radius: 16, x: 0, y: 6)
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("QUARK THEATER").font(.system(size: 56, weight: .bold, design: .rounded))
-                                Text("你的网盘，电视上的私人影院").font(.title3).foregroundStyle(.secondary)
-                            }
-                        }
-                        if model.isMock {
-                            Label("MOCK · 模拟数据 · 未连接夸克", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-                        }
-                        if let account = model.account {
-                            Label(account.displayName, systemImage: "person.crop.circle.badge.checkmark").font(.title2)
-                            Text("已登录。媒体库已自动刮削海报并聚合电视剧集，点击即可全屏播放。").foregroundStyle(.secondary)
-
-                            HStack(spacing: 24) {
-                                Button {
-                                    selectedTab = .media
-                                } label: {
-                                    Label("进入影视媒体库", systemImage: "film.stack")
-                                }
-                                .buttonStyle(.borderedProminent)
-
-                                Button {
-                                    selectedTab = .files
-                                } label: {
-                                    Label("浏览我的网盘", systemImage: "folder.fill")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button {
-                                    showFolderSelection = true
-                                } label: {
-                                    let count = BoundFolderStore.boundFolderIDs(accountID: account.accountId).count
-                                    Label(count > 0 ? "已绑定 \(count) 个文件夹" : "选择绑定文件夹", systemImage: "folder.badge.gearshape")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button(role: .destructive) {
-                                    Task { await model.logout() }
-                                } label: {
-                                    Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
-                                }
-                                .buttonStyle(.bordered)
-                            }
-
-                            if let client = model.client, let history {
-                                HomeContinueWatchingView(repository: history, accountID: account.accountId,
-                                    client: client, diagnostics: model.diagnostics)
-                            }
-                        } else {
-                            LoginScreen(model: model)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(60)
-                }
-                .background(
-                    LinearGradient(colors: [Color(red: 0.035, green: 0.08, blue: 0.13), .black],
-                        startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .ignoresSafeArea()
-                )
-            }
-            .tabItem { Label("首页", systemImage: "house") }
-            .tag(RootTab.home)
-
+            // MARK: - 3. Settings & Diagnostics
             SettingsScreen(model: model, history: history, mediaCatalog: mediaCatalog)
                 .tabItem { Label("设置", systemImage: "gearshape") }
                 .tag(RootTab.settings)
-
-            DiagnosticsScreen(diagnostics: model.diagnostics)
-                .tabItem { Label("诊断", systemImage: "waveform.path.ecg") }
-                .tag(RootTab.diagnostics)
         }
         .tint(.cyan)
+        .ignoresSafeArea()
         .task(id: model.account?.accountId) {
             if let account = model.account {
                 if !BoundFolderStore.hasConfigured(accountID: account.accountId) {
                     showFolderSelection = true
-                } else {
-                    selectedTab = .media
                 }
             }
         }
@@ -175,6 +100,166 @@ struct RootView: View {
     }
 }
 
+// MARK: - Sources Management Screen
+@MainActor
+private struct SourcesManagementScreen: View {
+    let model: SessionViewModel
+    let client: QuarkClient?
+    let accountID: String
+    let history: HistoryRepository?
+    @Binding var showFolderSelection: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 36) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("网盘与存储源管理")
+                        .font(.system(size: 42, weight: .bold))
+                    Text("统一管理绑定的云盘与局域网存储。所有影视资源在【影院】大厅混排聚合呈现，无需手动切换源。")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+
+                // Storage Source Cards Grid
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 28), GridItem(.flexible(), spacing: 28)], spacing: 28) {
+                    // Quark Drive
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Image(systemName: "cloud.fill")
+                                .font(.title)
+                                .foregroundStyle(.cyan)
+                            Text("夸克网盘")
+                                .font(.title3.bold())
+                            Spacer()
+                            Text("已连接")
+                                .font(.caption.bold())
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color.green.opacity(0.2), in: Capsule())
+                                .foregroundStyle(.green)
+                        }
+
+                        let count = BoundFolderStore.boundFolderIDs(accountID: accountID).count
+                        Text(count > 0 ? "已绑定 \(count) 个影视文件夹并参与媒体库自动刮削" : "已连接 · 扫描根目录")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 16) {
+                            Button {
+                                showFolderSelection = true
+                            } label: {
+                                Label(count > 0 ? "管理绑定文件夹 (\(count))" : "选择绑定文件夹", systemImage: "folder.badge.gearshape")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(24)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.12), lineWidth: 1))
+
+                    // Aliyun Drive
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Image(systemName: "externaldrive.fill.badge.icloud")
+                                .font(.title)
+                                .foregroundStyle(.orange)
+                            Text("阿里云盘")
+                                .font(.title3.bold())
+                            Spacer()
+                            Text("即将推出")
+                                .font(.caption.bold())
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color.white.opacity(0.1), in: Capsule())
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("支持阿里云盘开放平台官方 OpenAPI 扫码授权，4K 原画高速串流。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("扫码授权 (规划中)") {}
+                            .buttonStyle(.bordered)
+                            .disabled(true)
+                    }
+                    .padding(24)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.08), lineWidth: 1))
+
+                    // WebDAV
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Image(systemName: "network")
+                                .font(.title)
+                                .foregroundStyle(.blue)
+                            Text("WebDAV 协议")
+                                .font(.title3.bold())
+                            Spacer()
+                            Text("即将推出")
+                                .font(.caption.bold())
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color.white.opacity(0.1), in: Capsule())
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("通用标准协议，可接入群晖/威联通/极空间 NAS、Alist 聚合挂载网盘。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("添加 WebDAV 节点 (规划中)") {}
+                            .buttonStyle(.bordered)
+                            .disabled(true)
+                    }
+                    .padding(24)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.08), lineWidth: 1))
+
+                    // SMB
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Image(systemName: "server.rack")
+                                .font(.title)
+                                .foregroundStyle(.mint)
+                            Text("SMB 局域网共享")
+                                .font(.title3.bold())
+                            Spacer()
+                            Text("即将推出")
+                                .font(.caption.bold())
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color.white.opacity(0.1), in: Capsule())
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("自动扫描局域网 Wi-Fi 内的 Mac/PC 与家庭服务器共享，局域网零外网流量秒播。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("局域网设备发现 (规划中)") {}
+                            .buttonStyle(.bordered)
+                            .disabled(true)
+                    }
+                    .padding(24)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                }
+
+                // Cloud File Browser Section
+                if let client {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("网盘文件目录浏览")
+                            .font(.title2.bold())
+                        FileBrowserScreen(client: client, diagnostics: model.diagnostics, isMock: model.isMock,
+                                          accountID: accountID, history: history)
+                    }
+                    .padding(.top, 16)
+                }
+            }
+            .padding(60)
+        }
+    }
+}
+
+// MARK: - Settings Screen
 @MainActor
 private struct SettingsScreen: View {
     @ObservedObject var model: SessionViewModel
@@ -188,7 +273,7 @@ private struct SettingsScreen: View {
     @State private var confirmLogout = false
     @State private var confirmClearHistory = false
     @State private var confirmClearMetadata = false
-    @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = false
+    @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
     @AppStorage("scraperLanguage") private var scraperLanguage = "zh-CN"
 
     var body: some View {
@@ -203,12 +288,13 @@ private struct SettingsScreen: View {
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("QUARK THEATER · 设置").font(.largeTitle.bold())
-                        Text("版本：\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0") · tvOS 原生私人影院")
+                        Text("版本：\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0") · tvOS 原生私人影院")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
+
                 Text("账号：\(model.account?.displayName ?? "未登录")")
-                Text(model.isMock ? "运行模式：Mock（未连接真实服务）" : "运行模式：真实夸克接口")
+                Text(model.isMock ? "运行模式：Mock（未连接真实服务）" : "运行模式：真实夸克接口 (v2/play 4K极速专线)")
 
                 if let account = model.account {
                     Text("影视文件夹绑定").font(.title2.bold())
@@ -223,8 +309,8 @@ private struct SettingsScreen: View {
                     .buttonStyle(.bordered)
                 }
 
-                Text("TMDB 海报刮削（开箱即用）").font(.title2.bold())
-                Text("内置开箱即用社区刮削 Key，无需任何额外配置即可自动获取电影、电视剧封面海报与剧集信息。")
+                Text("TMDB 海报刮削设置").font(.title2.bold())
+                Text("内置社区刮削源，支持同音字（蛛丝→蜘蛛侠）智能抗和谐映射与多层目录穿透。")
                     .foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -249,35 +335,62 @@ private struct SettingsScreen: View {
                         } catch {
                             settingsMessage = error.localizedDescription
                         }
-                    }.disabled(tmdbToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                    Button("恢复内置 Key", role: .destructive) {
-                        do {
-                            try tmdbStore.delete()
-                            tmdbToken = ""
+                    }
+                    .buttonStyle(.borderedProminent)
+                    if tmdbConfigured {
+                        Button("清除自定义 Token", role: .destructive) {
+                            try? tmdbStore.delete()
                             tmdbConfigured = false
-                            settingsMessage = "已清除自定义 Token，已恢复使用内置 Key。"
-                        } catch {
-                            settingsMessage = error.localizedDescription
+                            settingsMessage = "已恢复为内置开箱即用 TMDB Key。"
                         }
-                    }.disabled(!tmdbConfigured)
+                        .buttonStyle(.bordered)
+                    }
                 }
-                Text(tmdbConfigured ? "当前使用：用户自定义 TMDB Token" : "当前使用：内置开箱即用社区 Key").foregroundStyle(.secondary)
 
-                Toggle("电视剧自动播放下一集", isOn: $autoPlayNextEpisode).frame(maxWidth: 900)
-                if let settingsMessage { Text(settingsMessage).foregroundStyle(.secondary) }
-                if model.account != nil {
-                    Button("退出登录", role: .destructive) { confirmLogout = true }.disabled(model.isBusy)
-                    Button("清理观看记录", role: .destructive) { confirmClearHistory = true }
-                    Button("清理已确认影视元数据", role: .destructive) { confirmClearMetadata = true }
+                Text("播放偏好").font(.title2.bold())
+                Toggle("剧集自动连播下一集", isOn: $autoPlayNextEpisode)
+                    .frame(maxWidth: 800)
+
+                Text("数据维护与缓存管理").font(.title2.bold())
+                HStack(spacing: 20) {
+                    Button("清理全部观看记录", role: .destructive) { confirmClearHistory = true }
+                        .buttonStyle(.bordered)
+
+                    Button("清空影视匹配缓存并重新刮削", role: .destructive) { confirmClearMetadata = true }
+                        .buttonStyle(.bordered)
+
+                    Button("退出当前账号", role: .destructive) { confirmLogout = true }
+                        .buttonStyle(.bordered)
                 }
-                if let message = model.message { Text(message).foregroundStyle(.secondary) }
-            }.frame(maxWidth: 1400, alignment: .leading).padding(60)
-        }
-        .sheet(isPresented: $showFolderSelection) {
-            if let client = model.client, let account = model.account {
-                FolderSelectionScreen(client: client, accountID: account.accountId, diagnostics: model.diagnostics, isPresented: $showFolderSelection) {}
+
+                if let settingsMessage {
+                    Text(settingsMessage).foregroundStyle(.cyan).font(.callout)
+                }
+
+                // Integrated Diagnostics Section
+                Text("诊断与日志记录").font(.title2.bold())
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("最近运行事件（不记录 Cookie 与令牌）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("清空日志") { model.diagnostics.clear() }
+                            .buttonStyle(.bordered)
+                    }
+                    ForEach(model.diagnostics.entries.suffix(15).reversed()) { entry in
+                        HStack(alignment: .top, spacing: 16) {
+                            Text(entry.date, style: .time).monospacedDigit().font(.caption2).foregroundStyle(.secondary)
+                            Text(entry.message).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .padding(20)
+                .background(Color.white.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
             }
+            .frame(maxWidth: 1500, alignment: .leading)
+            .padding(60)
         }
         .confirmationDialog("退出当前夸克账号？", isPresented: $confirmLogout, titleVisibility: .visible) {
             Button("退出登录", role: .destructive) { Task { await model.logout() } }
@@ -291,39 +404,19 @@ private struct SettingsScreen: View {
             }
             Button("取消", role: .cancel) {}
         }
-        .confirmationDialog("清理当前账号已确认的影视匹配？", isPresented: $confirmClearMetadata, titleVisibility: .visible) {
-            Button("清理元数据", role: .destructive) {
+        .confirmationDialog("清空当前账号全部影视匹配？", isPresented: $confirmClearMetadata, titleVisibility: .visible) {
+            Button("清空并重置媒体库", role: .destructive) {
                 guard let accountID = model.account?.accountId else { return }
-                do { try mediaCatalog?.clear(accountID: accountID); settingsMessage = "影视匹配缓存已清理。" }
+                do { try mediaCatalog?.clearAll(accountID: accountID); settingsMessage = "影视匹配缓存已全部清空，请前往【影院】重新扫描。" }
                 catch { settingsMessage = error.localizedDescription }
             }
             Button("取消", role: .cancel) {}
         }
-        .task { tmdbConfigured = (try? tmdbStore.load()) != nil }
-    }
-}
-
-@MainActor
-private struct DiagnosticsScreen: View {
-    @ObservedObject var diagnostics: Diagnostics
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                HStack {
-                    Text("诊断记录").font(.largeTitle.bold())
-                    Spacer()
-                    Button("清空") { diagnostics.clear() }
-                }
-                Text("仅保留本次运行最近 100 条事件；不记录 Cookie、二维码令牌或下载地址。").foregroundStyle(.secondary)
-                if diagnostics.entries.isEmpty { Text("暂无记录") }
-                ForEach(diagnostics.entries) { entry in
-                    HStack(alignment: .top, spacing: 24) {
-                        Text(entry.date, style: .time).monospacedDigit().foregroundStyle(.secondary)
-                        Text(entry.message).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    Divider()
-                }
-            }.frame(maxWidth: 1500, alignment: .leading).padding(60)
+        .sheet(isPresented: $showFolderSelection) {
+            if let client = model.client, let account = model.account {
+                FolderSelectionScreen(client: client, accountID: account.accountId, diagnostics: model.diagnostics, isPresented: $showFolderSelection) {}
+            }
         }
+        .task { tmdbConfigured = (try? tmdbStore.load()) != nil }
     }
 }

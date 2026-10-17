@@ -44,7 +44,9 @@ final class SessionViewModel: ObservableObject {
             }
         } catch {
             Self.logger.error("⚠️ SessionViewModel: 恢复会话遇到错误: \(error.localizedDescription, privacy: .public)")
-            message = userFacingError(error)
+            if account == nil {
+                message = userFacingError(error)
+            }
             diagnostics.recordError(error, context: "会话恢复")
         }
     }

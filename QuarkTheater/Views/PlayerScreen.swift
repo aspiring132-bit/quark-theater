@@ -9,6 +9,8 @@ struct PlayerScreen: View {
     @State private var showDrawer = false
     @State private var showHintPill = true
     @State private var selectedDrawerTab: DrawerTab = .episodes
+    @State private var isSeeking = false
+    @State private var seekDismissTask: Task<Void, Never>?
 
     // Two-tier focus: which row is focused (tab bar vs content row)
     @FocusState private var focusZone: FocusZone?
@@ -103,6 +105,20 @@ struct PlayerScreen: View {
             if showDrawer {
                 drawerPanel
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            // Adaptive Network Speed Badge: appears when buffering or dragging progress bar, fades out when HUD hides
+            if (coordinator.isBuffering || isSeeking || coordinator.isLoading) {
+                speedBadgeView
+                    .padding(.top, 40)
+                    .padding(.trailing, 60)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+            }
+        }
+        .onMoveCommand { direction in
+            if direction == .left || direction == .right {
+                triggerSeeking()
             }
         }
         .task {
@@ -439,5 +455,39 @@ struct PlayerScreen: View {
                 .stroke(isSelected ? Color.cyan : Color.white.opacity(0.1),
                         lineWidth: isSelected ? 2 : 1)
         )
+    }
+
+    // MARK: - Speed Badge View
+    @ViewBuilder
+    private var speedBadgeView: some View {
+        let speed = coordinator.networkSpeedText
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.horizontal.fill")
+                .foregroundStyle(.cyan)
+            if coordinator.isBuffering {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .scaleEffect(0.6)
+                Text(speed.isEmpty ? "正在缓冲" : "缓冲中 · \(speed)")
+                    .font(.caption.bold())
+            } else {
+                Text(speed.isEmpty ? "夸克高速专线" : speed)
+                    .font(.caption.bold())
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.4), radius: 8, x: 0, y: 4)
+    }
+
+    private func triggerSeeking() {
+        withAnimation(.easeInOut(duration: 0.2)) { isSeeking = true }
+        seekDismissTask?.cancel()
+        seekDismissTask = Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            withAnimation(.easeOut(duration: 0.3)) { isSeeking = false }
+        }
     }
 }

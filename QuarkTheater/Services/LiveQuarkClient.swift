@@ -72,13 +72,19 @@ final class LiveQuarkClient: QuarkClient {
             try persistSession()
             return account
         } catch {
-            Self.logger.error("❌ 会话已失效: \(error.localizedDescription, privacy: .public)")
-            account = nil
-            if error as? QuarkError == .authenticationRequired {
+            if let qe = error as? QuarkError, qe == .authenticationRequired {
+                Self.logger.error("❌ 会话已明确失效(401): \(error.localizedDescription, privacy: .public)")
+                account = nil
                 cookies.removeAll()
                 try? credentialStore.delete()
+                throw error
+            } else {
+                // Temporary network glitch / timeout / offline.
+                // Keep the account as authenticated so user is NOT kicked back to login screen!
+                Self.logger.warning("⚠️ 会话检查遭遇网络波动/超时，保留本地登录态: \(error.localizedDescription, privacy: .public)")
+                account = acc
+                return account
             }
-            throw error
         }
     }
 

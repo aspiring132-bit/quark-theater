@@ -118,6 +118,10 @@ struct TMDBService {
         var queryVariants: [String] = []
         for c in rawCandidates {
             let trimmed = c.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Never query TMDB with pure numbers like "01", "04", "(09)"
+            if trimmed.range(of: #"^\(?\d{1,4}\)?$"#, options: .regularExpression) != nil {
+                continue
+            }
             if !trimmed.isEmpty && trimmed.count > 1 && seen.insert(trimmed.lowercased()).inserted {
                 queryVariants.append(trimmed)
             }

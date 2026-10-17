@@ -20,7 +20,10 @@ struct MediaLibraryScreen: View {
     @State private var focusedItem: MediaItem?
     @FocusState private var focusedPosterID: String?
 
-    // Playback state: directly plays without opening sub-sheets!
+    // Selected item for full Netflix/Apple TV style MediaItemDetailScreen
+    @State private var selectedDetailItem: MediaItem?
+
+    // Playback state
     @State private var playingFile: CloudFile?
     @State private var playlistQueue: [CloudFile] = []
 
@@ -137,6 +140,21 @@ struct MediaLibraryScreen: View {
                     .buttonStyle(.bordered)
 
                     Button {
+                        Task {
+                            try? catalog.clearAll(accountID: accountID)
+                            reloadConfirmed()
+                            await scan()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "trash")
+                            Text("清空重刮")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isScanning)
+
+                    Button {
                         showFolderSelection = true
                     } label: {
                         let count = BoundFolderStore.boundFolderIDs(accountID: accountID).count
@@ -145,6 +163,10 @@ struct MediaLibraryScreen: View {
                     .buttonStyle(.bordered)
                 }
                 .padding(.horizontal, 60)
+
+                // Continue Watching Row (if any)
+                HomeContinueWatchingView(repository: history, accountID: accountID, client: client, diagnostics: diagnostics)
+                    .padding(.horizontal, 60)
 
                 // Scanning Progress / Status message
                 if isScanning {
@@ -171,7 +193,7 @@ struct MediaLibraryScreen: View {
                             Text("全部影视 (\(posterItems.count))")
                                 .font(.title2.bold())
                             Spacer()
-                            Text("移动光标预览详情 · 点击直接起播")
+                            Text("点击查看分季详情 · 遥控器快速直达")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -180,14 +202,14 @@ struct MediaLibraryScreen: View {
                             ForEach(posterItems) { item in
                                 Button {
                                     focusedItem = item
-                                    let episodes = episodesFor(item: item)
-                                    if let first = episodes.first {
-                                        playlistQueue = episodes.map(\.1)
-                                        playingFile = first.1
-                                    }
+                                    selectedDetailItem = item
                                 } label: {
                                     VStack(alignment: .leading, spacing: 10) {
                                         posterView(item.posterPath, height: 320)
+                                            .overlay(alignment: .topLeading) {
+                                                SourceBadgeView(type: item.sourceType)
+                                                    .padding(8)
+                                            }
                                             .overlay(alignment: .topTrailing) {
                                                 if item.mediaType == .series {
                                                     let eps = confirmed.filter { $0.tmdbId == item.tmdbId }
@@ -299,7 +321,22 @@ struct MediaLibraryScreen: View {
                 }
             }
         }
-        // Direct Fullscreen Player: 1-click play without opening any nested sheets!
+        .fullScreenCover(item: $selectedDetailItem) { detailItem in
+            let related = confirmed.filter { $0.tmdbId == detailItem.tmdbId && $0.mediaType == detailItem.mediaType }
+            MediaItemDetailScreen(
+                item: detailItem,
+                related: related.isEmpty ? [detailItem] : related,
+                candidates: candidates,
+                client: client,
+                accountID: accountID,
+                history: history,
+                tokenStore: tokenStore,
+                catalog: catalog,
+                diagnostics: diagnostics
+            ) {
+                reloadConfirmed()
+            }
+        }
         .fullScreenCover(item: $playingFile) { file in
             PlayerScreen(
                 client: client,
@@ -426,11 +463,14 @@ struct MediaLibraryScreen: View {
                         }
                     }
 
-                    // Large Title
-                    Text(item.title)
-                        .font(.system(size: 46, weight: .black, design: .rounded))
-                        .lineLimit(2)
-                        .shadow(color: .black.opacity(0.8), radius: 8, x: 0, y: 4)
+                    // Large Title with Source Badge
+                    HStack(spacing: 16) {
+                        Text(item.title)
+                            .font(.system(size: 46, weight: .black, design: .rounded))
+                            .lineLimit(2)
+                            .shadow(color: .black.opacity(0.8), radius: 8, x: 0, y: 4)
+                        SourceBadgeView(type: item.sourceType)
+                    }
 
                     // Synopsis / Overview
                     if let overview = item.overview, !overview.isEmpty {
@@ -443,17 +483,14 @@ struct MediaLibraryScreen: View {
 
                     // Direct Action Buttons
                     HStack(spacing: 20) {
-                        // 1-Click Play Button
+                        // View Details & Seasons Button (Primary focus)
                         Button {
-                            if let first = episodes.first {
-                                playlistQueue = episodes.map(\.1)
-                                playingFile = first.1
-                            }
+                            selectedDetailItem = item
                         } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: "play.fill")
+                                Image(systemName: "info.circle.fill")
                                     .font(.headline)
-                                Text(item.mediaType == .series ? "立即播放第 1 集" : "立即播放正片")
+                                Text("查看详情与分季")
                                     .font(.headline.bold())
                             }
                             .padding(.horizontal, 24)
@@ -461,6 +498,23 @@ struct MediaLibraryScreen: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.cyan)
+
+                        // 1-Click Quick Play
+                        Button {
+                            if let first = episodes.first {
+                                playlistQueue = episodes.map(\.1)
+                                playingFile = first.1
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "play.fill")
+                                Text("直接起播")
+                                    .font(.headline)
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.bordered)
 
                         // Rematch Button
                         Button {

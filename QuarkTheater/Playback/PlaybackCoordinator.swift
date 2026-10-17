@@ -7,6 +7,8 @@ final class PlaybackCoordinator: ObservableObject {
     @Published private(set) var player: AVPlayer?
     @Published private(set) var message: String?
     @Published private(set) var isLoading = false
+    @Published private(set) var isBuffering = false
+    @Published private(set) var networkSpeedText: String = ""
     @Published private(set) var audioOptions: [AVMediaSelectionOption] = []
     @Published private(set) var subtitleOptions: [AVMediaSelectionOption] = []
     private let client: QuarkClient
@@ -18,8 +20,11 @@ final class PlaybackCoordinator: ObservableObject {
     private let diagnostics: Diagnostics
     private let retryPolicy = RetryPolicy(maximumRetries: 2, baseDelay: 1)
     private var periodicObserver: Any?
+    private var speedObserver: Any?
     private var itemObservers: [NSObjectProtocol] = []
     private var itemStatusObserver: NSKeyValueObservation?
+    private var bufferEmptyObserver: NSKeyValueObservation?
+    private var timeControlObserver: NSKeyValueObservation?
     private var audioGroup: AVMediaSelectionGroup?
     private var subtitleGroup: AVMediaSelectionGroup?
     private var retryTask: Task<Void, Never>?
@@ -224,12 +229,31 @@ final class PlaybackCoordinator: ObservableObject {
                     self?.handlePlaybackFailure(error)
                 }
             }
+            bufferEmptyObserver = item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
+                Task { @MainActor in
+                    guard self?.player?.currentItem === item else { return }
+                    self?.isBuffering = item.isPlaybackBufferEmpty
+                }
+            }
+        }
+        timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            Task { @MainActor in
+                guard self?.player === player else { return }
+                self?.isBuffering = (player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+            }
         }
         periodicObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 15, preferredTimescale: 600), queue: .main
         ) { [weak self] _ in Task { @MainActor in
             guard self?.player === player else { return }
             self?.saveProgress()
+        } }
+        // 1-second timer to sample real network throughput
+        speedObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main
+        ) { [weak self] _ in Task { @MainActor in
+            guard let self, let player = self.player, let item = player.currentItem else { return }
+            self.sampleThroughput(from: item)
         } }
         itemObservers.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime,
             object: player.currentItem, queue: .main) { [weak self] note in
@@ -250,18 +274,39 @@ final class PlaybackCoordinator: ObservableObject {
         itemObservers.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemPlaybackStalled,
             object: player.currentItem, queue: .main) { [weak self] _ in
                 Task { @MainActor in
+                    self?.isBuffering = true
                     self?.diagnostics.record("网络缓冲不足，AVPlayer 积极等待缓冲以防音画不同步…")
                 }
             })
     }
 
+    private func sampleThroughput(from item: AVPlayerItem) {
+        guard let event = item.accessLog()?.events.last, event.observedBitrate > 0 else {
+            return
+        }
+        let bytesPerSec = event.observedBitrate / 8.0
+        if bytesPerSec >= 1024 * 1024 {
+            networkSpeedText = String(format: "%.1f MB/s", bytesPerSec / (1024 * 1024))
+        } else if bytesPerSec >= 1024 {
+            networkSpeedText = String(format: "%.0f KB/s", bytesPerSec / 1024)
+        } else {
+            networkSpeedText = String(format: "%.0f B/s", bytesPerSec)
+        }
+    }
+
     private func detachObservers() {
         if let periodicObserver, let player { player.removeTimeObserver(periodicObserver) }
         periodicObserver = nil
+        if let speedObserver, let player { player.removeTimeObserver(speedObserver) }
+        speedObserver = nil
         itemObservers.forEach(NotificationCenter.default.removeObserver)
         itemObservers.removeAll()
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
+        bufferEmptyObserver?.invalidate()
+        bufferEmptyObserver = nil
+        timeControlObserver?.invalidate()
+        timeControlObserver = nil
     }
 
     private func handlePlaybackFailure(_ error: Error) {

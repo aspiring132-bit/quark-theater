@@ -10,41 +10,95 @@ struct HomeContinueWatchingView: View {
     @State private var selectedFile: CloudFile?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("继续观看").font(.title2.bold())
-            if records.isEmpty { Text("还没有未看完的视频").foregroundStyle(.secondary) }
-            ForEach(records.prefix(5)) { item in
-                Button {
-                    selectedFile = CloudFile(fileId: item.fileId, parentId: "0", name: item.displayName,
-                        size: 0, fileExtension: (item.displayName as NSString).pathExtension, modifiedAt: nil, isDirectory: false)
-                } label: {
+        if !records.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("继续观看")
+                        .font(.title2.bold())
+                    Spacer()
+                    Text("自动保存进度 · 一键续播")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 20) {
-                        Image(systemName: "play.circle.fill").foregroundStyle(.cyan).font(.title2)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.displayName)
-                                .font(.headline)
-                                .lineLimit(1)
-                            if item.fileName != nil {
-                                Text("ID: \(item.fileId.prefix(12))…")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                        ForEach(records.prefix(8)) { item in
+                            Button {
+                                selectedFile = CloudFile(
+                                    fileId: item.fileId,
+                                    parentId: "0",
+                                    name: item.displayName,
+                                    size: 0,
+                                    fileExtension: (item.displayName as NSString).pathExtension,
+                                    modifiedAt: nil,
+                                    isDirectory: false
+                                )
+                            } label: {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Image(systemName: "play.circle.fill")
+                                            .font(.title3)
+                                            .foregroundStyle(.cyan)
+                                        Spacer()
+                                        SourceBadgeView(type: .quark)
+                                    }
+
+                                    Text(item.displayName)
+                                        .font(.headline)
+                                        .lineLimit(1)
+
+                                    Spacer()
+
+                                    let progress = item.durationSeconds > 0 ? (item.positionSeconds / item.durationSeconds) : 0
+                                    HStack {
+                                        Text("已看至 \(Int(progress * 100))%")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Text("\(formatDuration(item.positionSeconds)) / \(formatDuration(item.durationSeconds))")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    // Progress Bar
+                                    GeometryReader { geo in
+                                        ZStack(alignment: .leading) {
+                                            Capsule().fill(Color.white.opacity(0.15))
+                                            Capsule().fill(Color.cyan)
+                                                .frame(width: geo.size.width * CGFloat(min(1.0, max(0.05, progress))))
+                                        }
+                                    }
+                                    .frame(height: 4)
+                                }
+                                .padding(16)
+                                .frame(width: 320, height: 130)
+                                .background(Color.white.opacity(0.06))
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 1))
                             }
+                            .buttonStyle(.card)
                         }
-                        Spacer()
-                        Text("\(Int(item.positionSeconds)) / \(Int(item.durationSeconds)) 秒").foregroundStyle(.secondary)
-                    }.padding(14)
+                    }
+                    .padding(.vertical, 8)
                 }
             }
-        }
-        .task { reload() }
-        .fullScreenCover(item: $selectedFile) { file in
-            PlayerScreen(client: client, accountID: accountID, file: file,
-                         history: repository, diagnostics: diagnostics)
+            .task { reload() }
+            .fullScreenCover(item: $selectedFile) { file in
+                PlayerScreen(client: client, accountID: accountID, file: file,
+                             history: repository, diagnostics: diagnostics)
+            }
         }
     }
 
+    private func formatDuration(_ seconds: Double) -> String {
+        let mins = Int(seconds) / 60
+        let secs = Int(seconds) % 60
+        return String(format: "%02d:%02d", mins, secs)
+    }
+
     private func reload() {
-        records = (try? repository.recent(accountID: accountID).filter { !$0.completed }) ?? []
+        records = (try? repository.recent(accountID: accountID).filter { !$0.completed && $0.positionSeconds > 5 }) ?? []
     }
 }
 

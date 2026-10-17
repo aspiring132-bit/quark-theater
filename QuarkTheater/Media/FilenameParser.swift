@@ -11,24 +11,26 @@ struct ParsedMediaName: Equatable {
 }
 
 enum FilenameParser {
-    // MARK: - Episode patterns: SxxExx / xxXxx / bare numbers
+    // MARK: - Episode patterns: SxxExx / xxXxx / 第X集 / bare numbers
     private static let episodePatterns = [
-        #"(?i)^(.*?)\bS(\d{1,2})\s*E(\d{1,3})\b"#,
-        #"(?i)^(.*?)\b(\d{1,2})x(\d{1,3})\b"#
+        #"(?i)^(.*?)(?:[ ._-]|\b)?[Ss](\d{1,2})\s*[Ee](\d{1,3})(?:[ ._-]|\b|$)"#,
+        #"(?i)^(.*?)(?:[ ._-]|\b)?(\d{1,2})[xX](\d{1,3})(?:[ ._-]|\b|$)"#
     ]
-    // Bare bare-number episode: file is just "01", "(09)", "第3集" etc. — no title info at all.
+    private static let chineseEpisodePattern = #"(?i)^(.*?)[ ._-]*第\s*(\d{1,3})\s*集"#
+    // Bare episode numbers: "01", "(09)", "9", "01.mp4"
     private static let bareNumberPattern = #"^\(?(\d{1,3})\)?$"#
     private static let yearPattern = #"(?:\(|\b)((?:19|20)\d{2})(?:\)|\b)"#
     private static let releaseTail = #"(?i)[ ._-]+(?:2160p|1080p|720p|480p|4k|8k|bluray|blu.?ray|web.?dl|webrip|hdtv|proper|remux|x26[45]|h\.?26[45]|hevc|avc|aac|dts).*$"#
 
     // MARK: - Public API
 
-    /// Parse a filename, optionally using the parent folder name as a context hint.
-    /// - Parameters:
-    ///   - filename: The raw file name (with or without extension).
-    ///   - parentFolderName: The immediate parent folder name; used when the filename
-    ///     carries no title information (bare episode numbers, S01/S02 labels, etc.).
-    static func parse(_ filename: String, parentFolderName: String? = nil) -> ParsedMediaName {
+    /// Parse a filename, optionally using the folder hierarchy context.
+    static func parse(
+        _ filename: String,
+        parentFolderName: String? = nil,
+        detectedShowTitle: String? = nil,
+        detectedSeasonNumber: Int? = nil
+    ) -> ParsedMediaName {
         let base = (filename as NSString).deletingPathExtension
 
         // 1. Try SxxExx / xxXxx patterns
@@ -37,27 +39,39 @@ enum FilenameParser {
                let season = Int(capture(match, 2, base)), let episode = Int(capture(match, 3, base)) {
                 let rawTitle = capture(match, 1, base)
                 let title = clean(rawTitle)
-                // If the embedded title is empty/whitespace, fall back to parent folder
-                let finalTitle = title.isEmpty ? folderTitle(parentFolderName) ?? title : title
+                // If title in filename is empty or just generic, fall back to detected show
+                let effectiveTitle = !title.isEmpty ? title : (detectedShowTitle ?? folderTitle(parentFolderName) ?? filename)
                 return ParsedMediaName(
-                    title: finalTitle.isEmpty ? (parentFolderName ?? filename) : finalTitle,
+                    title: effectiveTitle,
                     year: nil, mediaType: .series,
                     seasonNumber: season, episodeNumber: episode,
-                    inferredFromParent: title.isEmpty && parentFolderName != nil
+                    inferredFromParent: title.isEmpty && detectedShowTitle != nil
                 )
             }
         }
 
-        // 2. Bare number episode (e.g. "01.mp4", "(09)", "9")
+        // 2. Try Chinese "第X集" pattern
+        if let match = firstMatch(chineseEpisodePattern, in: base), match.numberOfRanges == 3,
+           let episode = Int(capture(match, 2, base)) {
+            let rawTitle = capture(match, 1, base)
+            let title = clean(rawTitle)
+            let effectiveTitle = !title.isEmpty ? title : (detectedShowTitle ?? folderTitle(parentFolderName) ?? filename)
+            return ParsedMediaName(
+                title: effectiveTitle,
+                year: nil, mediaType: .series,
+                seasonNumber: detectedSeasonNumber ?? 1, episodeNumber: episode,
+                inferredFromParent: title.isEmpty && detectedShowTitle != nil
+            )
+        }
+
+        // 2. Bare number episode (e.g. "01.mp4", "(09)", "9", "12")
         if let match = firstMatch(bareNumberPattern, in: base.trimmingCharacters(in: .whitespaces)),
            let episode = Int(capture(match, 1, base.trimmingCharacters(in: .whitespaces))) {
-            // We need the parent folder to figure out which show this belongs to.
-            // Heuristic: derive season from grandparent-like clues in parentFolderName ("S04", "第4季").
-            let (parentTitle, parentSeason) = parseFolderForSeason(parentFolderName)
+            let effectiveTitle = detectedShowTitle ?? folderTitle(parentFolderName) ?? base
             return ParsedMediaName(
-                title: parentTitle ?? (parentFolderName ?? base),
+                title: effectiveTitle,
                 year: nil, mediaType: .series,
-                seasonNumber: parentSeason, episodeNumber: episode,
+                seasonNumber: detectedSeasonNumber, episodeNumber: episode,
                 inferredFromParent: true
             )
         }
@@ -70,54 +84,73 @@ enum FilenameParser {
         title = title.replacingOccurrences(of: releaseTail, with: "", options: .regularExpression)
         title = clean(title)
 
-        // 4. Strip subtitle-only suffix after Chinese colon (：) if the prefix looks like a transliterated title
-        //    e.g. "蛛丝4：焕然一新" → use "蛛丝4" for search, which TMDB won't find; better to search the raw name
-        //    and also attempt stripping the suffix.
-        //    We keep both title and stripped variant; the scorer will pick the better match.
-
         return ParsedMediaName(
-            title: title.isEmpty ? base : title,
+            title: title.isEmpty ? (detectedShowTitle ?? base) : title,
             year: year, mediaType: .movie,
             seasonNumber: nil, episodeNumber: nil,
             inferredFromParent: false
         )
     }
 
-    // MARK: - Helpers
+    // MARK: - Hierarchy Analysis
 
-    /// Extract a human-readable show title from a parent folder name, stripping season markers
-    /// like "S01", "第1季", "Season 1", trailing series counts, brackets etc.
+    /// Analyzes the full directory path array (e.g. ["来自：分享", "G 高堡奇人S01~S04", "S04"])
+    /// and extracts (Show Title, Season Number).
+    static func extractShowAndSeason(fromPath pathComponents: [String]) -> (show: String?, season: Int?) {
+        var season: Int? = nil
+        var show: String? = nil
+
+        for comp in pathComponents.reversed() {
+            // Ignore top-level system drive tags
+            if comp.contains("来自：") || comp.contains("网盘") || comp.contains("新建文件夹") {
+                continue
+            }
+
+            // Check if this component specifies a season (e.g. "S04", "S01", "第2季", "大西洋帝国S01")
+            if season == nil {
+                if let m = firstMatch(#"(?i)[Ss](\d{1,2})(?:[^\d]|$)"#, in: comp),
+                   let num = Int(capture(m, 1, comp)) {
+                    season = num
+                } else if let m = firstMatch(#"第(\d+)季"#, in: comp),
+                          let num = Int(capture(m, 1, comp)) {
+                    season = num
+                }
+            }
+
+            // Extract show title
+            if show == nil {
+                if let ft = folderTitle(comp), ft.count > 1 {
+                    show = ft
+                }
+            }
+        }
+
+        return (show, season)
+    }
+
+    /// Extract a human-readable show title from a folder name, stripping season markers,
+    /// site prefixes ("G 高堡奇人", "S使女的故事"), trailing counts, and resolution tags.
     static func folderTitle(_ folderName: String?) -> String? {
         guard let folderName else { return nil }
         var s = folderName
-        // Strip leading single-letter prefixes used by some share sites ("G 高堡奇人", "S使女的故事")
+        // Strip single letter share-site prefixes ("G 高堡奇人", "S使女的故事")
         s = s.replacingOccurrences(of: #"^[A-Za-z]\s+"#, with: "", options: .regularExpression)
-        // Strip season markers: S01~S04, S01, 第X季, Season X
-        s = s.replacingOccurrences(of: #"\s*[Ss]\d{1,2}(?:~[Ss]\d{1,2})?"#, with: "", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"\s*第\d+季"#, with: "", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"(?i)\s*[Ss]eason\s*\d+"#, with: "", options: .regularExpression)
-        // Strip trailing episode counts "(1)", "全23集", etc.
+        // Strip bracketed prefixes like "【美剧】"
+        s = s.replacingOccurrences(of: #"^[【\[][^】\]]+[】\]]"#, with: "", options: .regularExpression)
+        // Strip season indicators like "S01~S04", "S01", "第1季", "Season 1", "全5季"
+        s = s.replacingOccurrences(of: #"(?i)\s*[Ss]\d{1,2}(?:~[Ss]\d{1,2})?.*$"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"\s*第\d+季.*$"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"\s*全\d+[季部集].*$"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"(?i)\s*Season\s*\d+.*$"#, with: "", options: .regularExpression)
+        // Strip resolution & encoding tags
+        s = s.replacingOccurrences(of: #"(?i)\b(2160p|1080p|720p|4k|web-dl|webrip|x264|x265|h264|h265|aac|chs|eng).*\b"#, with: "", options: .regularExpression)
+        // Strip trailing episode counts "(1)", "(全23集)"
         s = s.replacingOccurrences(of: #"\s*\(\d+\)$"#, with: "", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"\s*全\d+[集部].*$"#, with: "", options: .regularExpression)
-        // Strip leading/trailing brackets
+        // Clean dots and underscores
+        s = s.replacingOccurrences(of: #"[._]+"#, with: " ", options: .regularExpression)
         s = s.trimmingCharacters(in: CharacterSet(charactersIn: "[]【】（）()「」"))
         s = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return s.isEmpty ? nil : s
-    }
-
-    /// Parse a season folder name like "S01", "S04", "第2季" and return (cleaned show title if any, season number).
-    private static func parseFolderForSeason(_ folderName: String?) -> (String?, Int?) {
-        guard let folderName else { return (nil, nil) }
-        // Pure season label: "S01", "S04", "Season 2", "第3季"
-        if let m = firstMatch(#"^[Ss](?:eason\s*)?(\d{1,2})$"#, in: folderName.trimmingCharacters(in: .whitespaces)),
-           let season = Int(capture(m, 1, folderName)) {
-            return (nil, season)
-        }
-        if let m = firstMatch(#"^第(\d+)季$"#, in: folderName.trimmingCharacters(in: .whitespaces)),
-           let season = Int(capture(m, 1, folderName)) {
-            return (nil, season)
-        }
-        return (folderTitle(folderName), nil)
     }
 
     private static func firstMatch(_ pattern: String, in value: String) -> NSTextCheckingResult? {

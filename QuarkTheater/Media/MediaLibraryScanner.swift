@@ -3,9 +3,9 @@ import Foundation
 struct ScannedMediaCandidate: Identifiable, Equatable {
     let file: CloudFile
     let parsedName: ParsedMediaName
-    /// The immediate parent folder name (e.g. S01, S04).
+    /// The immediate parent folder name (e.g. "S04", "大西洋帝国S01").
     let parentFolderName: String?
-    /// The ancestor show folder name (e.g. "G 高堡奇人S01~S04"), if parent is just a season.
+    /// The ancestor series folder name (e.g. "G 高堡奇人S01~S04", "【美剧】大西洋帝国.全5季.中英双字.1080P").
     let ancestorFolderName: String?
     var id: String { file.fileId }
 }
@@ -21,9 +21,10 @@ final class MediaLibraryScanner {
         progress: @escaping (Int) -> Void = { _ in }
     ) async throws -> [ScannedMediaCandidate] {
         let initialFolders = folderIDs.isEmpty ? ["0"] : folderIDs
-        // Track: (id, depth, parentFolderName, ancestorFolderName)
-        var pending: [(id: String, depth: Int, parent: String?, ancestor: String?)] = initialFolders.map {
-            (id: $0, depth: 0, parent: nil, ancestor: nil)
+        // Track: (id, depth, folderName, pathArray)
+        // pathArray records all folder names from root down to this folder
+        var pending: [(id: String, depth: Int, folderName: String?, path: [String])] = initialFolders.map {
+            (id: $0, depth: 0, folderName: nil, path: [])
         }
         var visited = Set<String>(initialFolders)
         var candidates: [ScannedMediaCandidate] = []
@@ -45,23 +46,29 @@ final class MediaLibraryScanner {
                 for file in result.files where seenFiles.insert(file.fileId).inserted {
                     if file.isDirectory {
                         if visited.insert(file.fileId).inserted {
-                            // If current folder has a valid show name (not S01/S02 and not system tags), pass it as ancestor
-                            let currentIsSeason = file.name.range(of: #"^[Ss]\d+$"#, options: .regularExpression) != nil
-                            let ancestorForChild = currentIsSeason ? (folder.ancestor ?? folder.parent) : file.name
-                            pending.append((file.fileId, folder.depth + 1, file.name, ancestorForChild))
+                            var childPath = folder.path
+                            childPath.append(file.name)
+                            pending.append((file.fileId, folder.depth + 1, file.name, childPath))
                         }
                     } else if file.isVideo {
-                        // Effective show folder is ancestor if parent is just a season (e.g. S04)
-                        let effectiveFolder = (folder.parent?.range(of: #"^[Ss]\d+$"#, options: .regularExpression) != nil)
-                            ? (folder.ancestor ?? folder.parent)
-                            : folder.parent
+                        // Extract show title and season from the entire folder hierarchy
+                        let (detectedShow, detectedSeason) = FilenameParser.extractShowAndSeason(fromPath: folder.path)
                         
-                        let parsed = FilenameParser.parse(file.name, parentFolderName: effectiveFolder)
+                        let immediateParent = folder.folderName
+                        let ancestor = folder.path.count >= 2 ? folder.path[folder.path.count - 2] : nil
+                        
+                        let parsed = FilenameParser.parse(
+                            file.name,
+                            parentFolderName: immediateParent,
+                            detectedShowTitle: detectedShow,
+                            detectedSeasonNumber: detectedSeason
+                        )
+                        
                         candidates.append(ScannedMediaCandidate(
                             file: file,
                             parsedName: parsed,
-                            parentFolderName: folder.parent,
-                            ancestorFolderName: folder.ancestor
+                            parentFolderName: immediateParent,
+                            ancestorFolderName: detectedShow ?? ancestor
                         ))
                     }
                     guard seenFiles.count <= maximumFiles else {

@@ -87,8 +87,29 @@ final class MediaCatalogRepository {
             guard code == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else { throw MediaCatalogError.corruptRecord }
             let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
             guard let item = try? JSONDecoder().decode(MediaItem.self, from: data) else { throw MediaCatalogError.corruptRecord }
-            items.append(item)
+            // Filter out items whose titles are bare single numbers (e.g. "04", "01", "(09)")
+            let isBareNumber = item.title.range(of: #"^\(?\d{1,4}\)?$"#, options: .regularExpression) != nil
+            if !isBareNumber {
+                items.append(item)
+            }
         }
+    }
+
+    func clearAll(accountID: String) throws {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "DELETE FROM media_catalog WHERE account_id=?", -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+        defer { sqlite3_finalize(statement) }
+        bind(accountID, statement, 1)
+        let code = sqlite3_step(statement)
+        guard code == SQLITE_DONE else { throw MediaCatalogError.database(code) }
+
+        var scanStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "DELETE FROM media_scan WHERE account_id=?", -1, &scanStmt, nil) == SQLITE_OK,
+              let scanStmt else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+        defer { sqlite3_finalize(scanStmt) }
+        bind(accountID, scanStmt, 1)
+        _ = sqlite3_step(scanStmt)
     }
 
     func remove(accountID: String, fileID: String) throws {

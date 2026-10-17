@@ -17,7 +17,9 @@ struct MediaItemDetailScreen: View {
     @State private var favoriteIDs = Set<String>()
     @State private var selectedFile: CloudFile?
     @State private var showRematchSheet = false
-    @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = false
+    @State private var selectedSeason: Int = 1
+    @State private var watchProgressByFileId: [String: Double] = [:]
+    @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
 
     private var fileByID: [String: CloudFile] {
         Dictionary(uniqueKeysWithValues: candidates.map { ($0.file.fileId, $0.file) })
@@ -28,71 +30,200 @@ struct MediaItemDetailScreen: View {
             guard let file = fileByID[metadata.fileId] else { return nil }
             return (metadata, file, FilenameParser.parse(file.name))
         }.sorted {
-            if $0.2.seasonNumber != $1.2.seasonNumber { return ($0.2.seasonNumber ?? 0) < ($1.2.seasonNumber ?? 0) }
-            return ($0.2.episodeNumber ?? 0) < ($1.2.episodeNumber ?? 0)
+            let s0 = $0.2.seasonNumber ?? 1
+            let s1 = $1.2.seasonNumber ?? 1
+            if s0 != s1 { return s0 < s1 }
+            let e0 = $0.2.episodeNumber ?? 1
+            let e1 = $1.2.episodeNumber ?? 1
+            return e0 < e1
         }
+    }
+
+    private var seasonGroups: [Int: [(MediaItem, CloudFile, ParsedMediaName)]] {
+        Dictionary(grouping: episodes, by: { $0.2.seasonNumber ?? 1 })
+    }
+
+    private var sortedSeasons: [Int] {
+        seasonGroups.keys.sorted()
+    }
+
+    private var currentSeasonEpisodes: [(MediaItem, CloudFile, ParsedMediaName)] {
+        seasonGroups[selectedSeason] ?? episodes
+    }
+
+    private var resumeEpisode: (MediaItem, CloudFile, ParsedMediaName)? {
+        episodes.first(where: {
+            let progress = watchProgressByFileId[$0.1.fileId] ?? 0
+            return progress > 0 && progress < 0.95
+        }) ?? episodes.first
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                backdrop(item.backdropPath)
-                HStack(alignment: .top, spacing: 32) {
-                    poster(item.posterPath)
+            VStack(alignment: .leading, spacing: 36) {
+                // MARK: - 1. Hero Header
+                ZStack(alignment: .bottomLeading) {
+                    backdrop(item.backdropPath)
+
+                    HStack(alignment: .bottom, spacing: 40) {
+                        poster(item.posterPath)
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(spacing: 12) {
+                                Text(item.title)
+                                    .font(.system(size: 46, weight: .bold))
+                                SourceBadgeView(type: item.sourceType)
+                            }
+
+                            HStack(spacing: 18) {
+                                Text(item.year.map(String.init) ?? "年份未知")
+                                    .font(.headline)
+                                    .foregroundStyle(.secondary)
+
+                                if let rating = item.rating, rating > 0 {
+                                    Label(String(format: "%.1f / 10", rating), systemImage: "star.fill")
+                                        .font(.headline.bold())
+                                        .foregroundStyle(.yellow)
+                                }
+
+                                Text(item.mediaType == .series ? "电视剧 · 共 \(episodes.count) 集" : "电影")
+                                    .font(.subheadline)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+
+                            if let overview = item.overview, !overview.isEmpty {
+                                Text(overview)
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(4)
+                                    .frame(maxWidth: 1000, alignment: .leading)
+                            }
+
+                            // Primary Action Buttons
+                            HStack(spacing: 20) {
+                                if let target = resumeEpisode {
+                                    Button {
+                                        selectedFile = target.1
+                                    } label: {
+                                        let epNum = target.2.episodeNumber ?? 1
+                                        let sNum = target.2.seasonNumber ?? 1
+                                        let labelText = item.mediaType == .series ? "继续播放 S\(sNum)E\(epNum)" : "播放正片"
+                                        Label(labelText, systemImage: "play.fill")
+                                            .font(.headline.bold())
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.cyan)
+                                }
+
+                                Button {
+                                    showRematchSheet = true
+                                } label: {
+                                    Label("重新匹配 TMDB", systemImage: "arrow.triangle.2.circlepath")
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    let isFav = !favoriteIDs.isDisjoint(with: related.map(\.fileId))
+                                    setFavorite(!isFav)
+                                } label: {
+                                    let isFav = !favoriteIDs.isDisjoint(with: related.map(\.fileId))
+                                    Label(isFav ? "已收藏" : "加入收藏",
+                                          systemImage: isFav ? "heart.fill" : "heart")
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button("返回") { dismiss() }
+                                    .buttonStyle(.bordered)
+                            }
+                            .padding(.top, 10)
+                        }
+                        .padding(.bottom, 24)
+                    }
+                    .padding(.horizontal, 60)
+                }
+
+                // MARK: - 2. TV Series Season Tabs
+                if item.mediaType == .series && sortedSeasons.count > 1 {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text(item.title).font(.largeTitle.bold())
-                        Text(item.year.map(String.init) ?? "年份未知").font(.title3).foregroundStyle(.secondary)
-                        if let rating = item.rating {
-                            Label(String(format: "%.1f / 10", rating), systemImage: "star.fill").foregroundStyle(.yellow)
+                        Text("分季选择")
+                            .font(.title2.bold())
+                            .padding(.horizontal, 60)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 16) {
+                                ForEach(sortedSeasons, id: \.self) { season in
+                                    let count = seasonGroups[season]?.count ?? 0
+                                    let isSelected = selectedSeason == season
+                                    Button {
+                                        selectedSeason = season
+                                    } label: {
+                                        Text("第 \(season) 季 (\(count)集)")
+                                            .font(.headline)
+                                            .padding(.horizontal, 24)
+                                            .padding(.vertical, 12)
+                                            .background(isSelected ? Color.cyan.opacity(0.3) : Color.white.opacity(0.08))
+                                            .clipShape(Capsule())
+                                            .overlay(
+                                                Capsule().stroke(isSelected ? Color.cyan : Color.clear, lineWidth: 2)
+                                            )
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                            .padding(.horizontal, 60)
                         }
-                        if let overview = item.overview, !overview.isEmpty {
-                            Text(overview).font(.title3).fixedSize(horizontal: false, vertical: true)
-                        }
-                        Text("匹配置信度：\(Int((item.matchConfidence ?? 0) * 100))% · TMDB ID \(item.tmdbId ?? 0)")
+                    }
+                }
+
+                // MARK: - 3. Episodes Grid / Rail
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        Text(item.mediaType == .series ? "第 \(selectedSeason) 季 · 剧集列表" : "播放源文件")
+                            .font(.title2.bold())
+                        Spacer()
+                        Text("共 \(currentSeasonEpisodes.count) 个视频")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 60)
 
-                        HStack(spacing: 20) {
-                            Button(favoriteIDs.isDisjoint(with: related.map(\.fileId)) ? "加入收藏" : "取消收藏") {
-                                setFavorite(favoriteIDs.isDisjoint(with: related.map(\.fileId)))
-                            }
-                            .buttonStyle(.bordered)
-
-                            Button {
-                                showRematchSheet = true
-                            } label: {
-                                Label("重新匹配 TMDB", systemImage: "arrow.triangle.2.circlepath")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if item.mediaType == .series {
-                    Text("分季分集").font(.title2.bold())
-                    let seasons = Dictionary(grouping: episodes, by: { $0.2.seasonNumber ?? 0 })
-                    ForEach(seasons.keys.sorted(), id: \.self) { season in
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("第 \(season) 季").font(.headline)
-                            let entries = seasons[season] ?? []
-                            ForEach(entries.indices, id: \.self) { index in
-                                let entry = entries[index]
-                                episodeRow(entry.0, file: entry.1, parsed: entry.2)
-                            }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 380), spacing: 24)], spacing: 24) {
+                        ForEach(currentSeasonEpisodes.indices, id: \.self) { index in
+                            let entry = currentSeasonEpisodes[index]
+                            episodeCard(entry.0, file: entry.1, parsed: entry.2)
                         }
                     }
-                } else {
-                    ForEach(episodes.indices, id: \.self) { index in
-                        let entry = episodes[index]
-                        episodeRow(entry.0, file: entry.1, parsed: entry.2)
-                    }
+                    .padding(.horizontal, 60)
                 }
-            }.frame(maxWidth: 1500, alignment: .leading).padding(56)
+            }
+            .padding(.bottom, 80)
         }
-        .task { favoriteIDs = (try? catalog.favoriteFileIDs(accountID: accountID)) ?? [] }
+        .ignoresSafeArea(edges: .top)
+        .task {
+            favoriteIDs = (try? catalog.favoriteFileIDs(accountID: accountID)) ?? []
+            if let firstSeason = sortedSeasons.first {
+                selectedSeason = firstSeason
+            }
+            // Load watch history progress
+            for ep in episodes {
+                if let record = try? history.history(accountID: accountID, fileID: ep.1.fileId),
+                   record.durationSeconds > 0 {
+                    watchProgressByFileId[ep.1.fileId] = record.positionSeconds / record.durationSeconds
+                }
+            }
+        }
         .fullScreenCover(item: $selectedFile) { file in
-            PlayerScreen(client: client, accountID: accountID, file: file,
-                         queue: episodes.map(\.1), automaticallyPlayNext: autoPlayNextEpisode,
-                         history: history, diagnostics: diagnostics)
+            PlayerScreen(
+                client: client,
+                accountID: accountID,
+                file: file,
+                queue: currentSeasonEpisodes.map(\.1),
+                automaticallyPlayNext: autoPlayNextEpisode,
+                history: history,
+                diagnostics: diagnostics
+            )
         }
         .sheet(isPresented: $showRematchSheet) {
             TMDBMatchScreen(
@@ -109,23 +240,74 @@ struct MediaItemDetailScreen: View {
         }
     }
 
+    // MARK: - Episode Card View
     @ViewBuilder
-    private func episodeRow(_ metadata: MediaItem, file: CloudFile, parsed: ParsedMediaName) -> some View {
-        let episodeCode = String(format: "S%02dE%02d", parsed.seasonNumber ?? 0, parsed.episodeNumber ?? 0)
-        Button { selectedFile = file } label: {
-            HStack(spacing: 20) {
-                Image(systemName: "play.fill").foregroundStyle(.cyan)
-                Text(item.mediaType == .series ? episodeCode : "播放")
-                    .font(.headline)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(file.name).lineLimit(1)
-                    Text("\(file.fileExtension.uppercased()) · \(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))")
-                        .font(.caption).foregroundStyle(.secondary)
+    private func episodeCard(_ metadata: MediaItem, file: CloudFile, parsed: ParsedMediaName) -> some View {
+        let epNumber = parsed.episodeNumber ?? 1
+        let progress = watchProgressByFileId[file.fileId] ?? 0
+
+        Button {
+            selectedFile = file
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(item.mediaType == .series ? "第 \(epNumber) 集" : "正片")
+                        .font(.headline.bold())
+                        .foregroundStyle(.cyan)
+
+                    Spacer()
+
+                    Text(file.fileExtension.uppercased())
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4))
                 }
-                Spacer()
-                if favoriteIDs.contains(metadata.fileId) { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-            }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(file.name)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(height: 42, alignment: .topLeading)
+
+                HStack {
+                    Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if progress >= 0.95 {
+                        Label("已看完", systemImage: "checkmark.circle.fill")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.green)
+                    } else if progress > 0 {
+                        Text("看至 \(Int(progress * 100))%")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                // Progress Bar
+                if progress > 0 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.15))
+                            Capsule().fill(Color.cyan)
+                                .frame(width: geo.size.width * CGFloat(min(1.0, progress)))
+                        }
+                    }
+                    .frame(height: 4)
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
         }
+        .buttonStyle(.card)
     }
 
     private func setFavorite(_ favorite: Bool) {
@@ -135,22 +317,47 @@ struct MediaItemDetailScreen: View {
         } catch { diagnostics.recordError(error, context: "收藏") }
     }
 
-    @ViewBuilder private func poster(_ path: String?) -> some View {
+    @ViewBuilder
+    private func poster(_ path: String?) -> some View {
         if let path, let url = URL(string: "https://image.tmdb.org/t/p/w500\(path)") {
-            AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: {
+            AsyncImage(url: url) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
                 Rectangle().fill(Color.white.opacity(0.08))
-            }.frame(width: 240, height: 360).clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .frame(width: 220, height: 330)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.6), radius: 16, x: 0, y: 8)
         } else {
-            Rectangle().fill(Color.white.opacity(0.08)).frame(width: 240, height: 360)
+            Rectangle().fill(Color.white.opacity(0.08))
+                .frame(width: 220, height: 330)
                 .overlay(Image(systemName: "film").font(.largeTitle))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
         }
     }
 
-    @ViewBuilder private func backdrop(_ path: String?) -> some View {
-        if let path, let url = URL(string: "https://image.tmdb.org/t/p/w1280\(path)") {
-            AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: {
-                Rectangle().fill(Color.white.opacity(0.05))
-            }.frame(height: 280).clipped().overlay(LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom))
+    @ViewBuilder
+    private func backdrop(_ path: String?) -> some View {
+        ZStack(alignment: .bottom) {
+            if let path, let url = URL(string: "https://image.tmdb.org/t/p/w1280\(path)") {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Rectangle().fill(Color.white.opacity(0.04))
+                }
+                .frame(height: 480)
+                .clipped()
+            } else {
+                Rectangle().fill(Color.white.opacity(0.04)).frame(height: 480)
+            }
+
+            // Cinematic fade gradients to black
+            LinearGradient(
+                colors: [.clear, Color.black.opacity(0.6), Color.black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
+        .frame(height: 480)
     }
 }
