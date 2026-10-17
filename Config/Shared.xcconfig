@@ -1,0 +1,14 @@
+// tvOS 16 is a source API baseline, not a verified device requirement.
+TVOS_DEPLOYMENT_TARGET = 16.0
+SWIFT_VERSION = 5.0
+SDKROOT = appletvos
+SUPPORTED_PLATFORMS = appletvos appletvsimulator
+TARGETED_DEVICE_FAMILY = 3
+CLANG_ENABLE_MODULES = YES
+CLANG_ENABLE_OBJC_ARC = YES
+SWIFT_STRICT_CONCURRENCY = targeted
+CODE_SIGN_STYLE = Automatic
+// Select your own team in Xcode before a device build.
+DEVELOPMENT_TEAM =
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1

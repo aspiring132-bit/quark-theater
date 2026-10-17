@@ -1,0 +1,21 @@
+{
+  "checked_at_utc": "2026-10-17T08:57:08Z",
+  "endpoint": "https://uop.quark.cn/cas/ajax/getTokenForQrcodeLogin",
+  "request_parameters": {
+    "client_id": "532",
+    "v": "1.2",
+    "request_id": "random UUID, not retained"
+  },
+  "http_status": 200,
+  "service_status": 2000000,
+  "has_token": true,
+  "top_level_fields": [
+    "status",
+    "message",
+    "data"
+  ],
+  "authenticated_account": false,
+  "token_stored": false,
+  "notes": "Anonymous HTTPS reachability probe only; response token was checked for presence in memory and never printed, stored, scanned, or used for account authentication.",
+  "probe_client": "Python urllib anonymous GET"
+}

@@ -1,0 +1,22 @@
+# Xcode local outputs
+build/
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcuserdatad/
+*.xcresult
+.DS_Store
+
+# Never commit account/session data or local databases
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+*.p12
+*.mobileprovision
+.env
+.env.*
+__pycache__/
