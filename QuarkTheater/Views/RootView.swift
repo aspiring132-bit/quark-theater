@@ -25,7 +25,7 @@ struct RootView: View {
     @ObservedObject var model: SessionViewModel
     let history: HistoryRepository?
     let mediaCatalog: MediaCatalogRepository?
-    @AppStorage("selectedTab") private var selectedTab: RootTab = .media
+    @State private var selectedTab: RootTab = .media
     @State private var showFolderSelection = false
     @State private var isDockHidden = false
     @FocusState private var focusedDockTab: RootTab?
@@ -35,28 +35,49 @@ struct RootView: View {
             Color(red: 0.04, green: 0.06, blue: 0.09)
                 .ignoresSafeArea()
 
-            // MARK: - 1. Screen Contents (Extends completely to Y=0 top edge)
-            Group {
-                switch selectedTab {
-                case .media:
-                    cinemaTab
-                case .sources:
-                    sourcesTab
-                case .settings:
-                    SettingsScreen(model: model, history: history, mediaCatalog: mediaCatalog)
+            // If not logged in, ALWAYS show cinemaTab (which renders LoginScreen)
+            if model.account == nil {
+                cinemaTab
+            } else {
+                // MARK: - 1. Screen Contents (Extends completely to Y=0 top edge)
+                Group {
+                    switch selectedTab {
+                    case .media:
+                        cinemaTab
+                    case .sources:
+                        sourcesTab
+                    case .settings:
+                        SettingsScreen(
+                            model: model,
+                            history: history,
+                            mediaCatalog: mediaCatalog,
+                            onBackToCinema: { selectedTab = .media }
+                        )
                         .padding(.top, 110)
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // MARK: - 2. True Floating Frosted Glass Dock Bar
-            if model.account != nil {
-                floatingDockBar
+                // MARK: - 2. Full-Width FocusSection Floating Dock Bar
+                dockContainer
             }
         }
         .ignoresSafeArea()
+        .onExitCommand {
+            if selectedTab != .media {
+                selectedTab = .media
+            }
+        }
+        .onChange(of: model.account) { _, newAccount in
+            if newAccount == nil {
+                selectedTab = .media
+            }
+        }
         .onChange(of: selectedTab) { _, _ in
             isDockHidden = false
+        }
+        .task {
+            UserDefaults.standard.removeObject(forKey: "selectedTab")
         }
         .task(id: model.account?.accountId) {
             if let account = model.account {
@@ -74,7 +95,22 @@ struct RootView: View {
         }
     }
 
-    // MARK: - Floating Dock Bar
+    // MARK: - Full-Width Dock Container (BUG FIX: Focus Section bridges entire screen width)
+    private var dockContainer: some View {
+        HStack {
+            Spacer()
+            floatingDockBar
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 36)
+        .focusSection()
+        .offset(y: (isDockHidden && focusedDockTab == nil) ? -140 : 0)
+        .opacity((isDockHidden && focusedDockTab == nil) ? 0 : 1)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isDockHidden)
+    }
+
+    // MARK: - Floating Dock Bar Pill
     private var floatingDockBar: some View {
         HStack(spacing: 8) {
             ForEach(RootTab.allCases, id: \.self) { tab in
@@ -112,11 +148,6 @@ struct RootView: View {
                 .stroke(Color.white.opacity(0.18), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.6), radius: 24, x: 0, y: 12)
-        .padding(.top, 36)
-        .focusSection()
-        .offset(y: (isDockHidden && focusedDockTab == nil) ? -140 : 0)
-        .opacity((isDockHidden && focusedDockTab == nil) ? 0 : 1)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isDockHidden)
     }
 
     private func dockBackground(isFocused: Bool, isSelected: Bool) -> Color {
@@ -191,7 +222,8 @@ struct RootView: View {
                     client: client,
                     accountID: account.accountId,
                     history: history,
-                    showFolderSelection: $showFolderSelection
+                    showFolderSelection: $showFolderSelection,
+                    onBackToCinema: { selectedTab = .media }
                 )
             }
             .id(account.accountId)
@@ -215,10 +247,21 @@ private struct SourcesManagementScreen: View {
     let accountID: String
     let history: HistoryRepository?
     @Binding var showFolderSelection: Bool
+    var onBackToCinema: () -> Void = {}
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 36) {
+            VStack(alignment: .leading, spacing: 32) {
+                HStack {
+                    Button(action: onBackToCinema) {
+                        Label("返回影院", systemImage: "arrow.left")
+                            .font(.headline.bold())
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("网盘与存储源管理")
                         .font(.system(size: 42, weight: .bold))
@@ -376,6 +419,7 @@ private struct SettingsScreen: View {
     @ObservedObject var model: SessionViewModel
     let history: HistoryRepository?
     let mediaCatalog: MediaCatalogRepository?
+    var onBackToCinema: () -> Void = {}
     @State private var tmdbToken = ""
     @State private var tmdbConfigured = false
     @State private var settingsMessage: String?
@@ -390,6 +434,18 @@ private struct SettingsScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
+                // Top Exit / Back to Cinema Button (Guarantees upward navigation exit)
+                HStack {
+                    Button(action: onBackToCinema) {
+                        Label("返回影院", systemImage: "arrow.left")
+                            .font(.headline.bold())
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.cyan)
+
+                    Spacer()
+                }
+
                 HStack(spacing: 24) {
                     Image("AppLogo")
                         .resizable()
@@ -504,7 +560,10 @@ private struct SettingsScreen: View {
             .padding(60)
         }
         .confirmationDialog("退出当前夸克账号？", isPresented: $confirmLogout, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive) { Task { await model.logout() } }
+            Button("退出登录", role: .destructive) {
+                onBackToCinema()
+                Task { await model.logout() }
+            }
             Button("取消", role: .cancel) {}
         }
         .confirmationDialog("清理当前账号的全部观看记录？", isPresented: $confirmClearHistory, titleVisibility: .visible) {
