@@ -103,24 +103,45 @@ struct MediaLibraryScreen: View {
                 }
 
                 // MARK: - 2. Filter & Search Controls
-                HStack(spacing: 24) {
-                    TextField("搜索媒体库片名…", text: $searchText)
-                        .frame(maxWidth: 420)
+                HStack(spacing: 16) {
+                    TextField("搜索片名…", text: $searchText)
+                        .frame(width: 260)
 
-                    Picker("分类", selection: $category) {
-                        Text("全部影视").tag("all")
-                        Text("电影").tag(MediaType.movie.rawValue)
-                        Text("电视剧").tag(MediaType.series.rawValue)
+                    // Category Filter Pills (High-contrast, never truncated or vertically wrapped)
+                    HStack(spacing: 10) {
+                        ForEach([("all", "全部"), (MediaType.movie.rawValue, "电影"), (MediaType.series.rawValue, "电视剧")], id: \.0) { tag, title in
+                            Button {
+                                category = tag
+                            } label: {
+                                Text(title)
+                                    .font(.headline)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .foregroundStyle(category == tag ? .cyan : .white)
+                                    .frame(minWidth: 88)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(category == tag ? .cyan : .clear)
+                        }
                     }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 480)
 
-                    Picker("排序", selection: $sortMode) {
-                        Text("名称").tag("name")
-                        Text("年份").tag("year")
+                    // Sort Filter Pills
+                    HStack(spacing: 10) {
+                        ForEach([("name", "按名称"), ("year", "按年份")], id: \.0) { tag, title in
+                            Button {
+                                sortMode = tag
+                            } label: {
+                                Text(title)
+                                    .font(.subheadline)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .foregroundStyle(sortMode == tag ? .cyan : .white.opacity(0.85))
+                                    .frame(minWidth: 96)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(sortMode == tag ? .cyan : .clear)
+                        }
                     }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 320)
 
                     Spacer()
 
@@ -132,10 +153,11 @@ struct MediaLibraryScreen: View {
                             scanTask = Task { await scan() }
                         }
                     } label: {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Image(systemName: isScanning ? "xmark.circle" : "arrow.triangle.2.circlepath")
-                            Text(isScanning ? "取消扫描" : "重新扫描与刮削")
+                            Text(isScanning ? "取消" : "重新刮削")
                         }
+                        .fixedSize()
                     }
                     .buttonStyle(.bordered)
 
@@ -150,6 +172,7 @@ struct MediaLibraryScreen: View {
                             Image(systemName: "trash")
                             Text("清空重刮")
                         }
+                        .fixedSize()
                     }
                     .buttonStyle(.bordered)
                     .disabled(isScanning)
@@ -159,6 +182,7 @@ struct MediaLibraryScreen: View {
                     } label: {
                         let count = BoundFolderStore.boundFolderIDs(accountID: accountID).count
                         Label(count > 0 ? "绑定 (\(count))" : "选择文件夹", systemImage: "folder.badge.gearshape")
+                            .fixedSize()
                     }
                     .buttonStyle(.bordered)
                 }
@@ -307,6 +331,7 @@ struct MediaLibraryScreen: View {
             }
             .padding(.bottom, 60)
         }
+        .ignoresSafeArea(edges: .top)
         .task {
             reloadConfirmed()
             if candidates.isEmpty {
@@ -389,15 +414,17 @@ struct MediaLibraryScreen: View {
         let episodes = episodesFor(item: item)
 
         ZStack(alignment: .bottomLeading) {
-            // Backdrop Image with cinematic dark gradient wash
+            // Backdrop Image with cinematic dark gradient wash extending to top
             backdropView(item.backdropPath ?? item.posterPath)
-                .frame(maxWidth: .infinity, maxHeight: 520)
+                .frame(maxWidth: .infinity, maxHeight: 580)
                 .clipped()
                 .overlay(
                     LinearGradient(
                         stops: [
-                            .init(color: .black.opacity(0.15), location: 0),
-                            .init(color: .black.opacity(0.7), location: 0.6),
+                            .init(color: .black.opacity(0.85), location: 0),
+                            .init(color: .black.opacity(0.4), location: 0.22),
+                            .init(color: .clear, location: 0.45),
+                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.7), location: 0.75),
                             .init(color: Color(red: 0.04, green: 0.06, blue: 0.09), location: 1.0)
                         ],
                         startPoint: .top,
@@ -490,9 +517,10 @@ struct MediaLibraryScreen: View {
                             HStack(spacing: 10) {
                                 Image(systemName: "info.circle.fill")
                                     .font(.headline)
-                                Text("查看详情与分季")
+                                Text("查看详情")
                                     .font(.headline.bold())
                             }
+                            .fixedSize()
                             .padding(.horizontal, 24)
                             .padding(.vertical, 12)
                         }
@@ -511,6 +539,7 @@ struct MediaLibraryScreen: View {
                                 Text("直接起播")
                                     .font(.headline)
                             }
+                            .fixedSize()
                             .padding(.horizontal, 18)
                             .padding(.vertical, 12)
                         }
@@ -522,6 +551,7 @@ struct MediaLibraryScreen: View {
                         } label: {
                             Label("重新匹配", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.headline)
+                                .fixedSize()
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
                         }
@@ -578,10 +608,11 @@ struct MediaLibraryScreen: View {
                     .frame(width: 240)
                     .shadow(color: .black.opacity(0.6), radius: 20, x: 0, y: 10)
             }
+            .padding(.top, 110)
             .padding(.horizontal, 60)
             .padding(.bottom, 36)
         }
-        .frame(height: 520)
+        .frame(minHeight: 600)
     }
 
     // MARK: - Backdrop View
@@ -704,7 +735,7 @@ struct MediaLibraryScreen: View {
                     parentFolderName: first.parentFolderName,
                     ancestorFolderName: first.ancestorFolderName
                 )
-                let ranked = MediaMatchScorer.rank(raw, for: first.parsedName)
+                let ranked = MediaMatchScorer.rank(raw, for: first.parsedName, ancestorFolderName: first.ancestorFolderName)
 
                 if let best = ranked.first, best.confidence >= 0.58 {
                     for candidate in groupCandidates {

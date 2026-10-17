@@ -133,19 +133,22 @@ enum FilenameParser {
     static func folderTitle(_ folderName: String?) -> String? {
         guard let folderName else { return nil }
         var s = folderName
-        // Strip single letter share-site prefixes ("G 高堡奇人", "S使女的故事")
+        // Strip bracketed prefixes like "【美剧】", "[日剧]", "[4K]"
+        s = s.replacingOccurrences(of: #"^[【\[][^】\]]+[】\]]\s*"#, with: "", options: .regularExpression)
+        // Strip single letter share-site / sorting prefixes:
+        // E.g. "G 高堡奇人", "S使女的故事" (with or without space, immediately before Chinese character)
+        s = s.replacingOccurrences(of: #"^[A-Za-z]\s*(?=[\u4e00-\u9fa5])"#, with: "", options: .regularExpression)
+        // Also strip single letter + whitespace if followed by ASCII
         s = s.replacingOccurrences(of: #"^[A-Za-z]\s+"#, with: "", options: .regularExpression)
-        // Strip bracketed prefixes like "【美剧】"
-        s = s.replacingOccurrences(of: #"^[【\[][^】\]]+[】\]]"#, with: "", options: .regularExpression)
-        // Strip season indicators like "S01~S04", "S01", "第1季", "Season 1", "全5季"
-        s = s.replacingOccurrences(of: #"(?i)\s*[Ss]\d{1,2}(?:~[Ss]\d{1,2})?.*$"#, with: "", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"\s*第\d+季.*$"#, with: "", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"\s*全\d+[季部集].*$"#, with: "", options: .regularExpression)
+        // Strip season indicators like "S01~S04", "S01-S04", "S01", "第1季", "Season 1", "全5季", "全6部"
+        s = s.replacingOccurrences(of: #"(?i)\s*[Ss]\d{1,2}(?:\s*[~-]\s*[Ss]?\d{1,2})?.*$"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"\s*第\s*\d+\s*季.*$"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"\s*全\s*\d+\s*[季部集].*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"(?i)\s*Season\s*\d+.*$"#, with: "", options: .regularExpression)
+        // Strip trailing episode counts "(1)", "(2)", "(全23集)"
+        s = s.replacingOccurrences(of: #"\s*[\(（]\s*\d+\s*[\)）]$"#, with: "", options: .regularExpression)
         // Strip resolution & encoding tags
         s = s.replacingOccurrences(of: #"(?i)\b(2160p|1080p|720p|4k|web-dl|webrip|x264|x265|h264|h265|aac|chs|eng).*\b"#, with: "", options: .regularExpression)
-        // Strip trailing episode counts "(1)", "(全23集)"
-        s = s.replacingOccurrences(of: #"\s*\(\d+\)$"#, with: "", options: .regularExpression)
         // Clean dots and underscores
         s = s.replacingOccurrences(of: #"[._]+"#, with: " ", options: .regularExpression)
         s = s.trimmingCharacters(in: CharacterSet(charactersIn: "[]【】（）()「」"))

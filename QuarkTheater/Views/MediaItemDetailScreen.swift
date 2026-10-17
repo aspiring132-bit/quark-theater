@@ -27,7 +27,15 @@ struct MediaItemDetailScreen: View {
 
     private var episodes: [(MediaItem, CloudFile, ParsedMediaName)] {
         related.compactMap { metadata in
-            guard let file = fileByID[metadata.fileId] else { return nil }
+            let file = fileByID[metadata.fileId] ?? CloudFile(
+                fileId: metadata.fileId,
+                parentId: "0",
+                name: metadata.title,
+                size: 0,
+                fileExtension: "mp4",
+                modifiedAt: nil,
+                isDirectory: false
+            )
             return (metadata, file, FilenameParser.parse(file.name))
         }.sorted {
             let s0 = $0.2.seasonNumber ?? 1
@@ -59,8 +67,12 @@ struct MediaItemDetailScreen: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 36) {
+        ZStack {
+            Color(red: 0.05, green: 0.07, blue: 0.10)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 36) {
                 // MARK: - 1. Hero Header
                 ZStack(alignment: .bottomLeading) {
                     backdrop(item.backdropPath)
@@ -134,8 +146,12 @@ struct MediaItemDetailScreen: View {
                                 }
                                 .buttonStyle(.bordered)
 
-                                Button("返回") { dismiss() }
-                                    .buttonStyle(.bordered)
+                                Button {
+                                    dismiss()
+                                } label: {
+                                    Label("返回", systemImage: "chevron.left")
+                                }
+                                .buttonStyle(.bordered)
                             }
                             .padding(.top, 10)
                         }
@@ -199,8 +215,9 @@ struct MediaItemDetailScreen: View {
                 }
             }
             .padding(.bottom, 80)
+            }
         }
-        .ignoresSafeArea(edges: .top)
+        .ignoresSafeArea()
         .task {
             favoriteIDs = (try? catalog.favoriteFileIDs(accountID: accountID)) ?? []
             if let firstSeason = sortedSeasons.first {
@@ -351,9 +368,9 @@ struct MediaItemDetailScreen: View {
                 Rectangle().fill(Color.white.opacity(0.04)).frame(height: 480)
             }
 
-            // Cinematic fade gradients to black
+            // Cinematic fade gradients to solid base color
             LinearGradient(
-                colors: [.clear, Color.black.opacity(0.6), Color.black],
+                colors: [.clear, Color(red: 0.05, green: 0.07, blue: 0.10).opacity(0.8), Color(red: 0.05, green: 0.07, blue: 0.10)],
                 startPoint: .top,
                 endPoint: .bottom
             )

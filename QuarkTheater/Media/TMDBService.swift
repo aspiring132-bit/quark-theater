@@ -4,6 +4,8 @@ struct TMDBSearchResult: Decodable, Identifiable, Equatable {
     let id: Int
     let title: String?
     let name: String?
+    let originalTitle: String?
+    let originalName: String?
     let releaseDate: String?
     let firstAirDate: String?
     let overview: String?
@@ -12,9 +14,11 @@ struct TMDBSearchResult: Decodable, Identifiable, Equatable {
     let voteAverage: Double?
     let genreIDs: [Int]?
     var displayTitle: String { title ?? name ?? "未知标题" }
+    var effectiveOriginalTitle: String { originalTitle ?? originalName ?? displayTitle }
     var year: Int? { Int((releaseDate ?? firstAirDate ?? "").prefix(4)) }
     enum CodingKeys: String, CodingKey {
         case id, title, name, overview
+        case originalTitle = "original_title", originalName = "original_name"
         case releaseDate = "release_date", firstAirDate = "first_air_date"
         case posterPath = "poster_path", backdropPath = "backdrop_path"
         case voteAverage = "vote_average", genreIDs = "genre_ids"
