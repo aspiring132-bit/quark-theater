@@ -1,9 +1,29 @@
 import AVFoundation
 import Combine
 import Foundation
+@preconcurrency import KSPlayer
+
+enum PlaybackEngine: String, CaseIterable, Identifiable {
+    case ksplayer = "ksplayer"
+    case avplayer = "avplayer"
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .ksplayer: return "KSPlayer (FFmpeg 强解 · 突破防盗链 / MKV / 多音轨)"
+        case .avplayer: return "系统原生 (AVPlayer)"
+        }
+    }
+}
 
 @MainActor
 final class PlaybackCoordinator: ObservableObject {
+    @Published private(set) var activeEngine: PlaybackEngine = .ksplayer
+    @Published private(set) var ksPlayerURL: URL?
+    @Published private(set) var ksPlayerOptions: KSOptions?
+    @Published private(set) var isPlaying: Bool = false
+    public let ksCoordinator = KSVideoPlayer.Coordinator()
+
     static func shouldCommitSeek(operationToken: UUID, currentToken: UUID, playerMatches: Bool, isCancelled: Bool = false) -> Bool {
         !isCancelled && operationToken == currentToken && playerMatches
     }
@@ -14,6 +34,23 @@ final class PlaybackCoordinator: ObservableObject {
 
     static func shouldScheduleRetry(currentGeneration: Int, scheduledGeneration: Int?, retryTaskActive: Bool) -> Bool {
         !(retryTaskActive && scheduledGeneration == currentGeneration)
+    }
+
+    static func shouldTreatKSFinishAsFailure(_ error: Error?) -> Bool { error != nil }
+
+    static func headersExcludingCookie(_ headers: [String: String]) -> [String: String] {
+        headers.filter { $0.key.caseInsensitiveCompare("Cookie") != .orderedSame }
+    }
+
+    static func ksTrackSnapshotChanged(previousIDs: [Int32], currentIDs: [Int32],
+                                       previousSelected: Int?, currentSelected: Int?) -> Bool {
+        previousIDs != currentIDs || previousSelected != currentSelected
+    }
+
+    static func ksSubtitleSelectionIndex(infoIDs: [String], selectedID: String?, trackFallback: Int?) -> Int? {
+        if infoIDs.isEmpty { return trackFallback }
+        guard let selectedID else { return nil }
+        return infoIDs.firstIndex(of: selectedID)
     }
 
     /// Returns true only when an observer callback still belongs to the active
@@ -36,6 +73,9 @@ final class PlaybackCoordinator: ObservableObject {
     @Published private(set) var networkSpeedText: String = ""
     @Published private(set) var audioOptions: [AVMediaSelectionOption] = []
     @Published private(set) var subtitleOptions: [AVMediaSelectionOption] = []
+    @Published private(set) var ksAudioOptions: [any MediaPlayerTrack] = []
+    @Published private(set) var ksSubtitleOptions: [any MediaPlayerTrack] = []
+    @Published private(set) var ksSubtitleParts: [SubtitlePart] = []
     @Published private(set) var lastSilentMarkerDate: Date?
     private let client: QuarkClient
     private let accountID: String
@@ -62,6 +102,14 @@ final class PlaybackCoordinator: ObservableObject {
     private var inFlightSeekTarget: Double?
     private var seekTask: Task<Void, Never>?
     private var seekOperationToken = UUID()
+    private var lastKSAudioIDs: [Int32] = []
+    private var lastKSSubtitleIDs: [Int32] = []
+    private var lastKSSelectedAudioIndex: Int?
+    private var lastKSSelectedSubtitleIndex: Int?
+
+    var hasActivePlayer: Bool {
+        ksPlayerURL != nil || player != nil
+    }
 
     init(client: QuarkClient, accountID: String, file: CloudFile, queue: [CloudFile] = [],
          automaticallyPlayNext: Bool = false, history: HistoryRepository, diagnostics: Diagnostics) {
@@ -75,7 +123,7 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     func start() async {
-        guard !isLoading, player == nil else { return }
+        guard !isLoading, !hasActivePlayer else { return }
         isLoading = true
         defer { isLoading = false }
         do {
@@ -86,9 +134,19 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     func saveProgress() {
-        guard let player else { return }
-        let position = max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0)
-        let duration = max(0, player.currentItem?.duration.seconds.isFinite == true ? player.currentItem!.duration.seconds : 0)
+        var position: Double = 0
+        var duration: Double = 0
+        if activeEngine == .ksplayer {
+            if let p = ksCoordinator.playerLayer?.player {
+                position = max(0, p.currentPlaybackTime)
+                duration = max(0, p.duration)
+            }
+        } else if let player {
+            position = max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0)
+            duration = max(0, player.currentItem?.duration.seconds.isFinite == true ? player.currentItem!.duration.seconds : 0)
+        }
+        guard duration > 0 || position > 0 else { return }
+        restoredPosition = position
         let completed = duration > 0 && position >= duration * 0.95
         let record = WatchHistory(accountId: accountID, fileId: currentFile.fileId,
             fileName: currentFile.name,
@@ -96,6 +154,28 @@ final class PlaybackCoordinator: ObservableObject {
             lastWatchedAt: Date(), completed: completed)
         do { try history.save(record) }
         catch { diagnostics.recordError(error, context: "播放进度保存") }
+    }
+
+    func togglePlayPause() {
+        if activeEngine == .ksplayer {
+            if let p = ksCoordinator.playerLayer?.player {
+                if p.isPlaying {
+                    ksCoordinator.playerLayer?.pause()
+                    isPlaying = false
+                } else {
+                    ksCoordinator.playerLayer?.play()
+                    isPlaying = true
+                }
+            }
+        } else if let player {
+            if player.timeControlStatus == .playing {
+                player.pause()
+                isPlaying = false
+            } else {
+                player.play()
+                isPlaying = true
+            }
+        }
     }
 
     func retry() {
@@ -107,6 +187,16 @@ final class PlaybackCoordinator: ObservableObject {
 
     /// Handles one discrete Siri Remote skip. Invalid/unready player state is ignored.
     func seek(direction: PlayerSeekDirection, interval: Int) {
+        if activeEngine == .ksplayer, let ksPlayer = ksCoordinator.playerLayer?.player {
+            let current = ksPlayer.currentPlaybackTime
+            let duration = ksPlayer.duration
+            guard let target = PlayerSeekMath.nextTarget(current: current, pending: nil, inFlight: nil,
+                                                         direction: direction, interval: interval, duration: duration) else { return }
+            ksCoordinator.seek(time: target)
+            diagnostics.record(category: .playback, level: .debug, event: .playbackSeek,
+                                metadata: [.playbackTimeSeconds(target)])
+            return
+        }
         guard let player, let item = player.currentItem, item.status == .readyToPlay else { return }
         let current = player.currentTime().seconds
         let duration = item.duration.seconds
@@ -157,8 +247,25 @@ final class PlaybackCoordinator: ObservableObject {
 
     var currentPlayingFile: CloudFile { currentFile }
     var playlistQueue: [CloudFile] { queue }
+    var audioTrackNames: [String] {
+        activeEngine == .ksplayer ? ksAudioOptions.map(\.name) : audioOptions.map(\.displayName)
+    }
+    var subtitleTrackNames: [String] {
+        if activeEngine == .ksplayer {
+            let modelNames = ksCoordinator.subtitleModel.subtitleInfos.map(\.name)
+            return modelNames.isEmpty ? ksSubtitleOptions.map(\.name) : modelNames
+        }
+        return subtitleOptions.map(\.displayName)
+    }
 
     func selectAudio(_ index: Int) {
+        if activeEngine == .ksplayer {
+            guard ksAudioOptions.indices.contains(index), let ksPlayer = ksCoordinator.playerLayer?.player else { return }
+            ksPlayer.select(track: ksAudioOptions[index])
+            selectedAudioIndex = index
+            recordAudioSnapshot(level: .notice)
+            return
+        }
         guard audioOptions.indices.contains(index), let audioGroup else { return }
         selectedAudioIndex = index
         player?.currentItem?.select(audioOptions[index], in: audioGroup)
@@ -166,6 +273,25 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     func selectSubtitle(_ index: Int?) {
+        if activeEngine == .ksplayer {
+            guard let ksPlayer = ksCoordinator.playerLayer?.player else { return }
+            if let index, index >= 0,
+               (ksSubtitleOptions.indices.contains(index) || ksCoordinator.subtitleModel.subtitleInfos.indices.contains(index)) {
+                let infos = ksCoordinator.subtitleModel.subtitleInfos
+                if infos.indices.contains(index) {
+                    ksCoordinator.subtitleModel.selectedSubtitleInfo = infos[index]
+                } else {
+                    ksPlayer.select(track: ksSubtitleOptions[index])
+                }
+                selectedSubtitleIndex = index
+            } else {
+                ksCoordinator.subtitleModel.selectedSubtitleInfo = nil
+                ksSubtitleParts = []
+                ksSubtitleOptions.forEach { $0.isEnabled = false }
+                selectedSubtitleIndex = nil
+            }
+            return
+        }
         guard let subtitleGroup else { return }
         selectedSubtitleIndex = index
         if let index, subtitleOptions.indices.contains(index) {
@@ -223,6 +349,10 @@ final class PlaybackCoordinator: ObservableObject {
         detachObservers()
         player?.pause()
         player = nil
+        ksCoordinator.resetPlayer()
+        ksPlayerURL = nil
+        ksPlayerOptions = nil
+        isPlaying = false
     }
 
     /// Records a user-provided report that sound may be missing. This is not acoustic detection.
@@ -231,9 +361,9 @@ final class PlaybackCoordinator: ObservableObject {
         var metadata: [DiagnosticMetadata] = [
             .playbackTimeSeconds(safePlaybackTime),
             .playerState(currentDiagnosticPlayerState),
-            .bufferEmpty(player?.currentItem?.isPlaybackBufferEmpty ?? false),
-            .likelyToKeepUp(player?.currentItem?.isPlaybackLikelyToKeepUp ?? false),
-            .trackCount(audioOptions.count),
+            .bufferEmpty(activeEngine == .ksplayer ? (ksCoordinator.playerLayer?.player.loadState == .loading) : (player?.currentItem?.isPlaybackBufferEmpty ?? false)),
+            .likelyToKeepUp(activeEngine == .ksplayer ? (ksCoordinator.playerLayer?.player.loadState == .playable) : (player?.currentItem?.isPlaybackLikelyToKeepUp ?? false)),
+            .trackCount(activeEngine == .ksplayer ? ksAudioOptions.count : audioOptions.count),
             .route(currentAudioRoute)
         ]
         if let selectedAudioIndex { metadata.append(.audioTrackIndex(selectedAudioIndex)) }
@@ -267,41 +397,120 @@ final class PlaybackCoordinator: ObservableObject {
             customHeaders["Cookie"] = cookieHeader
         }
 
-        let options: [String: Any] = [
-            AVURLAssetHTTPUserAgentKey: customHeaders["User-Agent"] ?? "",
-            AVURLAssetHTTPCookiesKey: applicableCookies,
-            "AVURLAssetHTTPHeaderFieldsKey": customHeaders
-        ]
-        let asset = AVURLAsset(url: resource.url, options: options)
-        let item = AVPlayerItem(asset: asset)
-
-        // Large file (e.g. 6GB 4K/1080P) streaming optimizations:
-        // 1. Buffer up to 60 seconds ahead instead of default 2s to absorb CDN jitter
-        item.preferredForwardBufferDuration = 60.0
-        // 2. Allow continuous buffering while paused/stalled
-        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        // 3. Keep full original bitrate
-        item.preferredPeakBitRate = 0
-
-        let next = AVPlayer(playerItem: item)
-        // 4. Strictly synchronize audio and video; wait for buffer instead of dropping video frames
-        next.automaticallyWaitsToMinimizeStalling = true
-
         invalidateSeekState()
-        detachObservers()
-        attachProgressObserver(to: next)
-        player?.pause()
-        player = next
-        audioOptions = []; subtitleOptions = []; audioGroup = nil; subtitleGroup = nil
-        Task { await loadMediaOptions(asset: asset, for: item, generation: requestGeneration) }
-        if position > 0 {
-            // seek(to:) is async in tvOS 26+ SDK; dispatch to avoid blocking the calling context.
-            Task { await next.seek(to: CMTime(seconds: position, preferredTimescale: 600)) }
+        let engineSetting = UserDefaults.standard.string(forKey: "playbackEngine") ?? "ksplayer"
+        if engineSetting == "ksplayer" {
+            activeEngine = .ksplayer
+            KSOptions.firstPlayerType = KSMEPlayer.self
+            let options = KSOptions()
+            options.appendHeader(Self.headersExcludingCookie(customHeaders))
+            options.setCookie(applicableCookies)
+            options.preferredForwardBufferDuration = 60.0
+
+            detachObservers()
+            player?.pause()
+            player = nil
+
+            self.ksPlayerOptions = options
+            self.ksPlayerURL = resource.url
+            self.audioOptions = []
+            self.subtitleOptions = []
+            self.ksAudioOptions = []
+            self.ksSubtitleOptions = []
+            self.ksSubtitleParts = []
+            self.lastKSAudioIDs = []
+            self.lastKSSubtitleIDs = []
+            self.lastKSSelectedAudioIndex = nil
+            self.lastKSSelectedSubtitleIndex = nil
+            self.audioGroup = nil
+            self.subtitleGroup = nil
+
+            ksCoordinator.onPlay = { [weak self] current, duration in
+                guard let self else { return }
+                self.refreshKSOptions()
+                if position > 0 && current < 1.0 {
+                    self.ksCoordinator.seek(time: position)
+                }
+                self.isPlaying = true
+            }
+            ksCoordinator.onStateChanged = { [weak self] _, state in
+                guard let self else { return }
+                switch state {
+                case .buffering:
+                    self.isBuffering = true
+                    self.isPlaying = true
+                case .readyToPlay, .bufferFinished:
+                    self.isBuffering = false
+                    self.isPlaying = true
+                case .paused:
+                    self.isPlaying = false
+                case .error:
+                    self.report(QuarkError.unsupportedPlayback("KSPlayer 解码播放异常，已为您记录诊断。"))
+                default:
+                    break
+                }
+            }
+            ksCoordinator.onBufferChanged = { [weak self] bufferedCount, consumeTime in
+                guard let self else { return }
+                if bufferedCount > 0 && consumeTime > 0 {
+                    let speedKB = Double(bufferedCount) / Double(consumeTime) / 1024.0
+                    if speedKB > 1024 {
+                        self.networkSpeedText = String(format: "%.1f MB/s", speedKB / 1024.0)
+                    } else {
+                        self.networkSpeedText = String(format: "%.0f KB/s", speedKB)
+                    }
+                }
+            }
+            ksCoordinator.onFinish = { [weak self] _, error in
+                guard let self else { return }
+                if let error { self.handlePlaybackFailure(error) }
+                else { self.playbackEnded() }
+            }
+            diagnostics.record("开始 KSPlayer (FFmpeg) 播放请求：\(requestedFile.name)")
+        } else {
+            activeEngine = .avplayer
+            ksCoordinator.resetPlayer()
+            ksPlayerURL = nil
+            ksPlayerOptions = nil
+
+            let options: [String: Any] = [
+                AVURLAssetHTTPUserAgentKey: customHeaders["User-Agent"] ?? "",
+                AVURLAssetHTTPCookiesKey: applicableCookies,
+                "AVURLAssetHTTPHeaderFieldsKey": Self.headersExcludingCookie(customHeaders)
+            ]
+            let asset = AVURLAsset(url: resource.url, options: options)
+            let item = AVPlayerItem(asset: asset)
+
+            // Large file (e.g. 6GB 4K/1080P) streaming optimizations:
+            // 1. Buffer up to 60 seconds ahead instead of default 2s to absorb CDN jitter
+            item.preferredForwardBufferDuration = 60.0
+            // 2. Allow continuous buffering while paused/stalled
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            // 3. Keep full original bitrate
+            item.preferredPeakBitRate = 0
+
+            let next = AVPlayer(playerItem: item)
+            // 4. Strictly synchronize audio and video; wait for buffer instead of dropping video frames
+            next.automaticallyWaitsToMinimizeStalling = true
+
+            detachObservers()
+            attachProgressObserver(to: next)
+            player?.pause()
+            player = next
+            audioOptions = []
+            subtitleOptions = []
+            ksAudioOptions = []
+            ksSubtitleOptions = []
+            audioGroup = nil
+            subtitleGroup = nil
+            Task { await loadMediaOptions(asset: asset, for: item, generation: requestGeneration) }
+            if position > 0 {
+                // seek(to:) is async in tvOS 26+ SDK; dispatch to avoid blocking the calling context.
+                Task { await next.seek(to: CMTime(seconds: position, preferredTimescale: 600)) }
+            }
+            next.play()
+            diagnostics.record("开始 AVPlayer 原生播放请求：\(requestedFile.name)")
         }
-        next.play()
-        diagnostics.record(category: .playback, level: .info, event: .playbackState, metadata: [
-            .playerState(.loading), .status(.started)
-        ])
     }
 
     private func loadMediaOptions(asset: AVURLAsset, for item: AVPlayerItem, generation: Int) async {
@@ -451,11 +660,25 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     private var safePlaybackTime: Double {
+        if activeEngine == .ksplayer {
+            let time = ksCoordinator.playerLayer?.player.currentPlaybackTime ?? 0
+            return time.isFinite ? max(0, time) : 0
+        }
         guard let seconds = player?.currentTime().seconds, seconds.isFinite else { return 0 }
         return max(0, seconds)
     }
 
     private var currentDiagnosticPlayerState: DiagnosticPlayerState {
+        if activeEngine == .ksplayer {
+            switch ksCoordinator.playerLayer?.player.playbackState {
+            case .playing: return .playing
+            case .paused: return .paused
+            case .seeking, .idle: return .waiting
+            case .finished: return .ended
+            case .stopped: return .idle
+            case .none: return .idle
+            }
+        }
         guard let player else { return .idle }
         if player.currentItem?.status == .failed { return .failed }
         switch player.timeControlStatus {
@@ -464,6 +687,39 @@ final class PlaybackCoordinator: ObservableObject {
         case .paused: return player.currentItem == nil ? .idle : .paused
         @unknown default: return .idle
         }
+    }
+
+    private func refreshKSOptions() {
+        guard let ksPlayer = ksCoordinator.playerLayer?.player else { return }
+        let audio = ksPlayer.tracks(mediaType: .audio)
+        let subtitles = ksPlayer.tracks(mediaType: .subtitle)
+        let selectedAudio = audio.firstIndex(where: { $0.isEnabled })
+        let selectedSubtitle = subtitles.firstIndex(where: { $0.isEnabled })
+        let audioChanged = Self.ksTrackSnapshotChanged(previousIDs: lastKSAudioIDs,
+                                                       currentIDs: audio.map(\.trackID),
+                                                       previousSelected: lastKSSelectedAudioIndex,
+                                                       currentSelected: selectedAudio)
+        let subtitleChanged = Self.ksTrackSnapshotChanged(previousIDs: lastKSSubtitleIDs,
+                                                          currentIDs: subtitles.map(\.trackID),
+                                                          previousSelected: lastKSSelectedSubtitleIndex,
+                                                          currentSelected: selectedSubtitle)
+        if audioChanged { ksAudioOptions = audio }
+        if subtitleChanged { ksSubtitleOptions = subtitles }
+        let parts = ksCoordinator.subtitleModel.parts
+        if ksSubtitleParts != parts { ksSubtitleParts = parts }
+        let infos = ksCoordinator.subtitleModel.subtitleInfos
+        let modelSelectedSubtitle = Self.ksSubtitleSelectionIndex(
+            infoIDs: infos.map(\.subtitleID),
+            selectedID: ksCoordinator.subtitleModel.selectedSubtitleInfo?.subtitleID,
+            trackFallback: selectedSubtitle
+        )
+        if selectedAudioIndex != selectedAudio { selectedAudioIndex = selectedAudio }
+        if selectedSubtitleIndex != modelSelectedSubtitle { selectedSubtitleIndex = modelSelectedSubtitle }
+        lastKSAudioIDs = audio.map(\.trackID)
+        lastKSSubtitleIDs = subtitles.map(\.trackID)
+        lastKSSelectedAudioIndex = selectedAudio
+        lastKSSelectedSubtitleIndex = selectedSubtitle
+        if audioChanged || subtitleChanged { recordAudioSnapshot(level: .info) }
     }
 
     private var currentWaitingReason: DiagnosticWaitingReason? {
@@ -506,7 +762,7 @@ final class PlaybackCoordinator: ObservableObject {
 
     private func recordAudioSnapshot(level: DiagnosticLevel) {
         var metadata: [DiagnosticMetadata] = [
-            .trackCount(audioOptions.count), .route(currentAudioRoute),
+            .trackCount(activeEngine == .ksplayer ? ksAudioOptions.count : audioOptions.count), .route(currentAudioRoute),
             .playbackTimeSeconds(safePlaybackTime)
         ]
         if let selectedAudioIndex { metadata.append(.audioTrackIndex(selectedAudioIndex)) }
@@ -554,6 +810,9 @@ final class PlaybackCoordinator: ObservableObject {
         bufferEmptyObserver = nil
         timeControlObserver?.invalidate()
         timeControlObserver = nil
+        ksCoordinator.resetPlayer()
+        ksPlayerURL = nil
+        ksPlayerOptions = nil
     }
 
     private func invalidateSeekState() {
@@ -589,7 +848,7 @@ final class PlaybackCoordinator: ObservableObject {
             guard !Task.isCancelled else { return }
             do {
                 guard let self else { return }
-                try await self.resolveAndPlay(at: self.player?.currentTime().seconds ?? self.restoredPosition)
+                try await self.resolveAndPlay(at: self.retryPosition)
             } catch is CancellationError { return }
             catch {
                 guard let self else { return }
@@ -607,9 +866,17 @@ final class PlaybackCoordinator: ObservableObject {
     private func startRetryLoop() async {
         isLoading = true
         defer { isLoading = false }
-        do { try await resolveAndPlay(at: player?.currentTime().seconds ?? restoredPosition); message = nil }
+        do { try await resolveAndPlay(at: retryPosition); message = nil }
         catch is CancellationError { return }
         catch { report(error) }
+    }
+
+    private var retryPosition: Double {
+        if activeEngine == .ksplayer,
+           let value = ksCoordinator.playerLayer?.player.currentPlaybackTime,
+           value.isFinite, value > 0 { return value }
+        if let value = player?.currentTime().seconds, value.isFinite, value > 0 { return value }
+        return restoredPosition
     }
 
     private func report(_ error: Error) {

@@ -38,6 +38,23 @@ final class MediaLibraryScannerTests: XCTestCase {
         XCTAssertEqual(results.first?.parsedName.seasonNumber, 1)
         XCTAssertEqual(results.first?.parsedName.episodeNumber, 1)
     }
+
+    func testLegacyCandidateInitializerRetainsDefaultPathComponents() {
+        let file = CloudFile(
+            fileId: "episode",
+            parentId: "season",
+            name: "01.mp4",
+            size: 1,
+            fileExtension: "mp4",
+            modifiedAt: nil,
+            isDirectory: false
+        )
+        let parsed = ParsedMediaName(title: "权力的游戏", mediaType: .series, seasonNumber: 1, episodeNumber: 1)
+
+        let candidate = ScannedMediaCandidate(file: file, parsedName: parsed)
+
+        XCTAssertEqual(candidate.pathComponents, [])
+    }
 }
 
 @MainActor

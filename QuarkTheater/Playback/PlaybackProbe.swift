@@ -54,15 +54,13 @@ final class PlaybackProbe: NSObject, URLSessionDataDelegate, @unchecked Sendable
 
     static func applicableCookies(_ cookies: [HTTPCookie], url: URL) -> [HTTPCookie] {
         guard let host = url.host?.lowercased() else { return [] }
-        let hostIsQuark = host == "quark.cn" || host.hasSuffix(".quark.cn")
         return cookies.filter { cookie in
-            let domain = cookie.domain.lowercased()
-            if hostIsQuark && domain.contains("quark.cn") {
-                return (!cookie.isSecure || url.scheme == "https") &&
-                    (cookie.expiresDate.map { $0 > Date() } ?? true)
-            }
-            let bare = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
-            let domainMatches = host == bare || host.hasSuffix("." + bare)
+            let rawDomain = cookie.domain.lowercased()
+            let isDomainCookie = rawDomain.hasPrefix(".")
+            let domain = isDomainCookie ? String(rawDomain.dropFirst()) : rawDomain
+            let domainMatches = isDomainCookie
+                ? (host == domain || host.hasSuffix("." + domain))
+                : host == domain
             let path = url.path.isEmpty ? "/" : url.path
             let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
             let pathMatches = path == cookiePath || (path.hasPrefix(cookiePath) &&

@@ -18,6 +18,24 @@ struct TMDBSearchResult: Decodable, Identifiable, Equatable {
     var displayTitle: String { title ?? name ?? "未知标题" }
     var effectiveOriginalTitle: String { originalTitle ?? originalName ?? displayTitle }
     var year: Int? { Int((releaseDate ?? firstAirDate ?? "").prefix(4)) }
+
+    init(id: Int, title: String? = nil, name: String? = nil, originalTitle: String? = nil, originalName: String? = nil,
+         releaseDate: String? = nil, firstAirDate: String? = nil, overview: String? = nil,
+         posterPath: String? = nil, backdropPath: String? = nil, voteAverage: Double? = nil, genreIDs: [Int]? = nil) {
+        self.id = id
+        self.title = title
+        self.name = name
+        self.originalTitle = originalTitle
+        self.originalName = originalName
+        self.releaseDate = releaseDate
+        self.firstAirDate = firstAirDate
+        self.overview = overview
+        self.posterPath = posterPath
+        self.backdropPath = backdropPath
+        self.voteAverage = voteAverage
+        self.genreIDs = genreIDs
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, title, name, overview
         case originalTitle = "original_title", originalName = "original_name"

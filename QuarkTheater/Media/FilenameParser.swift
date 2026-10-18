@@ -14,7 +14,7 @@ struct ParsedMediaName: Equatable {
     let inferredFromParent: Bool
     let unresolvedReason: ParsedMediaUnresolvedReason?
 
-    init(title: String, year: Int?, mediaType: MediaType, seasonNumber: Int?, episodeNumber: Int?, inferredFromParent: Bool, unresolvedReason: ParsedMediaUnresolvedReason? = nil) {
+    init(title: String, year: Int? = nil, mediaType: MediaType, seasonNumber: Int? = nil, episodeNumber: Int? = nil, inferredFromParent: Bool = false, unresolvedReason: ParsedMediaUnresolvedReason? = nil) {
         self.title = title
         self.year = year
         self.mediaType = mediaType

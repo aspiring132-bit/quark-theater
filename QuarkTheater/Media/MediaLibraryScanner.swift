@@ -17,6 +17,14 @@ struct ScannedMediaCandidate: Identifiable, Equatable {
         self.pathComponents = pathComponents
     }
     var id: String { file.fileId }
+
+    init(file: CloudFile, parsedName: ParsedMediaName, parentFolderName: String? = nil, ancestorFolderName: String? = nil) {
+        self.file = file
+        self.parsedName = parsedName
+        self.parentFolderName = parentFolderName
+        self.ancestorFolderName = ancestorFolderName
+        self.pathComponents = []
+    }
 }
 
 struct MediaScanRoot: Equatable {

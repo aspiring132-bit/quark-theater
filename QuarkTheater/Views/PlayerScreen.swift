@@ -1,4 +1,5 @@
 import AVKit
+import KSPlayer
 import SwiftUI
 
 @MainActor
@@ -42,8 +43,11 @@ struct PlayerScreen: View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
-            // 1. Full-screen Video Player
-            if let player = coordinator.player {
+            // 1. Full-screen Video Player (KSPlayer FFmpeg or Native AVPlayer)
+            if let ksURL = coordinator.ksPlayerURL, let ksOptions = coordinator.ksPlayerOptions {
+                KSVideoPlayer(coordinator: coordinator.ksCoordinator, url: ksURL, options: ksOptions)
+                    .ignoresSafeArea()
+            } else if let player = coordinator.player {
                 VideoPlayer(player: player)
                     .ignoresSafeArea()
             } else if coordinator.isLoading {
@@ -77,8 +81,30 @@ struct PlayerScreen: View {
                 }
             }
 
+            if coordinator.activeEngine == .ksplayer, !coordinator.ksSubtitleParts.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(coordinator.ksSubtitleParts) { part in
+                        if let image = part.image {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: 900, maxHeight: 240)
+                        } else if let text = part.text {
+                            Text(AttributedString(text))
+                                .font(.title3)
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.center)
+                                .shadow(color: .black, radius: 2)
+                        }
+                    }
+                }
+                .padding(.horizontal, 80)
+                .padding(.bottom, 110)
+                .allowsHitTesting(false)
+            }
+
             // 2. Bottom Drawer Trigger Pill (auto fades after 3s)
-            if !showDrawer && coordinator.player != nil && showHintPill {
+            if !showDrawer && coordinator.hasActivePlayer && showHintPill {
                 Button {
                     openDrawer()
                 } label: {
@@ -136,6 +162,9 @@ struct PlayerScreen: View {
         .onChange(of: focusedTarget) { _, target in
             if let target { diagnostics.recordFocusTransition(FocusDiagnostics.target(for: target)) }
         }
+        .onPlayPauseCommand {
+            coordinator.togglePlayPause()
+        }
     }
 
     // MARK: - Remote Navigation Handler
@@ -183,7 +212,8 @@ struct PlayerScreen: View {
         case .subtitles:
             return .subtitle("off")
         case .audio:
-            return coordinator.audioOptions.indices.first.map { .audio(String($0)) }
+            let count = coordinator.activeEngine == .ksplayer ? coordinator.ksAudioOptions.count : coordinator.audioOptions.count
+            return count > 0 ? .audio("0") : nil
         }
     }
 
@@ -223,7 +253,7 @@ struct PlayerScreen: View {
                     Text(coordinator.currentPlayingFile.name)
                         .font(.title3.bold())
                         .lineLimit(1)
-                    Text("共 \(coordinator.playlistQueue.count) 集 · 字幕 \(coordinator.subtitleOptions.count) 轨 · 音频 \(coordinator.audioOptions.count) 轨")
+                    Text("共 \(coordinator.playlistQueue.count) 集 · 字幕 \(coordinator.subtitleTrackNames.count) 轨 · 音频 \(coordinator.audioTrackNames.count) 轨")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -411,20 +441,20 @@ struct PlayerScreen: View {
                 .buttonStyle(.borderless)
                 .focused($focusedTarget, equals: .subtitle("off"))
 
-                if coordinator.subtitleOptions.isEmpty {
+                let names = coordinator.subtitleTrackNames
+                if names.isEmpty {
                     Text("未检测到内嵌字幕轨，支持外挂 SRT/ASS 格式。")
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 24)
                 } else {
-                    ForEach(coordinator.subtitleOptions.indices, id: \.self) { index in
+                    ForEach(names.indices, id: \.self) { index in
                         let isSelected = coordinator.selectedSubtitleIndex == index
-                        let option = coordinator.subtitleOptions[index]
                         Button {
                             coordinator.selectSubtitle(index)
                         } label: {
                             subtitleAudioLabel(
                                 icon: isSelected ? "checkmark.circle.fill" : "circle",
-                                title: option.displayName,
+                                title: names[index],
                                 subtitle: "字幕轨 #\(index + 1)",
                                 isSelected: isSelected
                             )
@@ -444,20 +474,20 @@ struct PlayerScreen: View {
     private var audioView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 16) {
-                if coordinator.audioOptions.isEmpty {
+                let names = coordinator.audioTrackNames
+                if names.isEmpty {
                     Text("当前使用系统默认立体声音频流。")
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 24)
                 } else {
-                    ForEach(coordinator.audioOptions.indices, id: \.self) { index in
+                    ForEach(names.indices, id: \.self) { index in
                         let isSelected = coordinator.selectedAudioIndex == index
-                        let option = coordinator.audioOptions[index]
                         Button {
                             coordinator.selectAudio(index)
                         } label: {
                             subtitleAudioLabel(
                                 icon: isSelected ? "speaker.wave.3.fill" : "speaker.wave.1",
-                                title: option.displayName,
+                                title: names[index],
                                 subtitle: "音轨 #\(index + 1)",
                                 isSelected: isSelected
                             )

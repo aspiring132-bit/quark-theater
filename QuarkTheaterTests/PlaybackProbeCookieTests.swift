@@ -85,6 +85,37 @@ final class PlaybackProbeCookieTests: XCTestCase {
     }
 
     @MainActor
+    func testKSPlayerFinishOnlyRetriesWhenCallbackCarriesError() {
+        XCTAssertTrue(PlaybackCoordinator.shouldTreatKSFinishAsFailure(NSError(domain: "test", code: 1)))
+        XCTAssertFalse(PlaybackCoordinator.shouldTreatKSFinishAsFailure(nil))
+    }
+
+    @MainActor
+    func testKSPlayerCookieHeaderIsProvidedOnlyThroughSetCookie() {
+        let headers = ["Cookie": "a=b", "User-Agent": "fixture"]
+        let filtered = PlaybackCoordinator.headersExcludingCookie(headers)
+        XCTAssertNil(filtered["Cookie"])
+        XCTAssertEqual(filtered["User-Agent"], "fixture")
+    }
+
+    @MainActor
+    func testKSPlayerTrackSnapshotOnlyChangesWhenTracksOrSelectionChanges() {
+        XCTAssertTrue(PlaybackCoordinator.ksTrackSnapshotChanged(previousIDs: [], currentIDs: [1], previousSelected: nil, currentSelected: nil))
+        XCTAssertFalse(PlaybackCoordinator.ksTrackSnapshotChanged(previousIDs: [1], currentIDs: [1], previousSelected: nil, currentSelected: nil))
+        XCTAssertTrue(PlaybackCoordinator.ksTrackSnapshotChanged(previousIDs: [1], currentIDs: [1], previousSelected: nil, currentSelected: 0))
+    }
+
+    @MainActor
+    func testKSSubtitleSelectionOffDoesNotFallBackToEmbeddedTrack() {
+        XCTAssertNil(PlaybackCoordinator.ksSubtitleSelectionIndex(
+            infoIDs: ["zh"], selectedID: nil, trackFallback: 0
+        ))
+        XCTAssertEqual(PlaybackCoordinator.ksSubtitleSelectionIndex(
+            infoIDs: [], selectedID: nil, trackFallback: 0
+        ), 0)
+    }
+
+    @MainActor
     func testQueuedObserverCallbackCannotMutateReplacementPlayback() {
         let oldItem = AVPlayerItem(url: URL(string: "https://example.invalid/old.m3u8")!)
         let newItem = AVPlayerItem(url: URL(string: "https://example.invalid/new.m3u8")!)
