@@ -227,7 +227,7 @@ enum FilenameParser {
         s = s.replacingOccurrences(of: #"^[A-Za-z]\s+"#, with: "", options: .regularExpression)
         // Strip season indicators like "S01~S04", "S01-S04", "S01", "第1季", "第四季", "Season 1", "全5季", "全6部"
         s = s.replacingOccurrences(of: #"(?i)^[Ss]\d{1,2}(?:\s*[~-]\s*[Ss]?\d{1,2})?$"#, with: "", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"(?i)[\s._-]+[Ss]\d{1,2}(?:\s*[~-]\s*[Ss]?\d{1,2})?.*$"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"(?i)(?:[\s._-]+|(?<=[\u4e00-\u9fa5]))[Ss]\d{1,2}(?:\s*[~-]\s*[Ss]?\d{1,2})?.*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\s*第\s*(?:\d+|[一二三四五六七八九十]+)\s*季.*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\s*全\s*(?:\d+|[一二三四五六七八九十]+)\s*[季部集].*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"(?i)\s*Season\s*(?:\d+|[一二三四五六七八九十]+).*$"#, with: "", options: .regularExpression)

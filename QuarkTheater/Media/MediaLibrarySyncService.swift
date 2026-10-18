@@ -46,7 +46,8 @@ final class MediaLibrarySyncService {
         try Task.checkCancellation()
 
         let changes = try catalog.reconcileScan(accountID: accountID, candidates: candidates)
-        let confirmedIDs = Set((try catalog.confirmed(accountID: accountID)).map(\.fileId))
+        let confirmedItems = try catalog.confirmed(accountID: accountID)
+        let confirmedIDs = Set(confirmedItems.map(\.fileId))
         let unconfirmed = candidates.filter { !confirmedIDs.contains($0.file.fileId) }
 
         var autoMatchedCount = 0
@@ -63,6 +64,40 @@ final class MediaLibrarySyncService {
                 try Task.checkCancellation()
                 groupIndex += 1
                 guard let first = groupCandidates.first, !first.parsedName.title.isEmpty else { continue }
+
+                // Fast-path: If this series is already confirmed (e.g. another season exists), bind directly
+                let normalizedFirst = MediaAliasResolver.normalizeTitle(first.parsedName.title)
+                if first.parsedName.mediaType == .series,
+                   let existingShow = confirmedItems.first(where: {
+                       $0.mediaType == .series &&
+                       (MediaAliasResolver.normalizeTitle($0.title) == normalizedFirst ||
+                        $0.title.lowercased() == first.parsedName.title.lowercased())
+                   }) {
+                    for candidate in groupCandidates {
+                        let item = MediaItem(
+                            id: candidate.file.fileId,
+                            fileId: candidate.file.fileId,
+                            mediaType: candidate.parsedName.mediaType,
+                            title: existingShow.title,
+                            year: existingShow.year,
+                            tmdbId: existingShow.tmdbId,
+                            posterPath: existingShow.posterPath,
+                            backdropPath: existingShow.backdropPath,
+                            overview: existingShow.overview,
+                            duration: nil,
+                            matchConfidence: existingShow.matchConfidence ?? 0.95,
+                            rating: existingShow.rating,
+                            genreIDs: existingShow.genreIDs,
+                            sourceType: .quark,
+                            seasonNumber: candidate.parsedName.seasonNumber,
+                            episodeNumber: candidate.parsedName.episodeNumber
+                        )
+                        try catalog.confirm(item, accountID: accountID)
+                        autoMatchedCount += 1
+                    }
+                    continue
+                }
+
                 progress("正在自动刮削 TMDB：\(first.parsedName.title) (\(groupIndex)/\(totalGroups))…")
 
                 do {

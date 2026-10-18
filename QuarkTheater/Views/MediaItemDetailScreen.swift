@@ -65,7 +65,7 @@ struct MediaItemDetailScreen: View {
     }
 
     private var episodes: [(MediaItem, CloudFile, ParsedMediaName)] {
-        related.compactMap { metadata in
+        var result = related.compactMap { metadata in
             let file = fileByID[metadata.fileId] ?? CloudFile(
                 fileId: metadata.fileId,
                 parentId: "0",
@@ -88,7 +88,45 @@ struct MediaItemDetailScreen: View {
                 inferredFromParent: parsed.inferredFromParent
             )
             return (metadata, file, effectiveParsed)
-        }.sorted {
+        }
+
+        let confirmedFileIDs = Set(result.map { $0.1.fileId })
+        let normalizedItemTitle = MediaAliasResolver.normalizeTitle(item.title)
+        let unconfirmedMatching = candidates.filter { cand in
+            guard !confirmedFileIDs.contains(cand.file.fileId),
+                  cand.parsedName.mediaType == item.mediaType || cand.parsedName.mediaType == .unknown else { return false }
+            let candTitle = MediaAliasResolver.normalizeTitle(cand.parsedName.title)
+            if candTitle == normalizedItemTitle { return true }
+            if let ancestor = cand.ancestorFolderName, MediaAliasResolver.normalizeTitle(ancestor) == normalizedItemTitle { return true }
+            if cand.pathComponents.contains(where: { MediaAliasResolver.normalizeTitle(FilenameParser.folderTitle($0) ?? "") == normalizedItemTitle }) { return true }
+            return false
+        }
+
+        for cand in unconfirmedMatching {
+            let season = cand.parsedName.seasonNumber ?? 1
+            let episode = cand.parsedName.episodeNumber ?? 1
+            let syntheticItem = MediaItem(
+                id: cand.file.fileId,
+                fileId: cand.file.fileId,
+                mediaType: item.mediaType,
+                title: item.title,
+                year: item.year,
+                tmdbId: item.tmdbId,
+                posterPath: item.posterPath,
+                backdropPath: item.backdropPath,
+                overview: item.overview,
+                duration: nil,
+                matchConfidence: 0.9,
+                rating: item.rating,
+                genreIDs: item.genreIDs,
+                sourceType: .quark,
+                seasonNumber: season,
+                episodeNumber: episode
+            )
+            result.append((syntheticItem, cand.file, cand.parsedName))
+        }
+
+        return result.sorted {
             let s0 = $0.2.seasonNumber ?? 0
             let s1 = $1.2.seasonNumber ?? 0
             if s0 != s1 { return s0 < s1 }

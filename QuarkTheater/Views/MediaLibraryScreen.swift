@@ -773,6 +773,40 @@ struct MediaLibraryScreen: View {
         for (_, groupCandidates) in groups {
             groupIndex += 1
             guard let first = groupCandidates.first else { continue }
+
+            // Fast-path: If this series is already confirmed, inherit metadata directly
+            let normalizedFirst = MediaAliasResolver.normalizeTitle(first.parsedName.title)
+            if first.parsedName.mediaType == .series,
+               let existingShow = confirmed.first(where: {
+                   $0.mediaType == .series &&
+                   (MediaAliasResolver.normalizeTitle($0.title) == normalizedFirst ||
+                    $0.title.lowercased() == first.parsedName.title.lowercased())
+               }) {
+                for candidate in groupCandidates {
+                    let item = MediaItem(
+                        id: candidate.file.fileId,
+                        fileId: candidate.file.fileId,
+                        mediaType: candidate.parsedName.mediaType,
+                        title: existingShow.title,
+                        year: existingShow.year,
+                        tmdbId: existingShow.tmdbId,
+                        posterPath: existingShow.posterPath,
+                        backdropPath: existingShow.backdropPath,
+                        overview: existingShow.overview,
+                        duration: nil,
+                        matchConfidence: existingShow.matchConfidence ?? 0.95,
+                        rating: existingShow.rating,
+                        genreIDs: existingShow.genreIDs,
+                        sourceType: .quark,
+                        seasonNumber: candidate.parsedName.seasonNumber,
+                        episodeNumber: candidate.parsedName.episodeNumber
+                    )
+                    try? catalog.confirm(item, accountID: accountID)
+                    matchedTitlesCount += 1
+                }
+                continue
+            }
+
             if !silent {
                 statusProgress = "正在自动刮削 TMDB：\(first.parsedName.title) (\(groupIndex)/\(totalGroups))…"
             }
