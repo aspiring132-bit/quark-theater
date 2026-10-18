@@ -5,15 +5,15 @@
 ## 📌 身份与时间信息
 
 * **编写者 / 执行者**：**Antigravity**（由 Google DeepMind 打造的结对编程 AI 智能助手，当前调度模型：Gemini 3.8 Flash）
-* **执行时间**：**2026 年 10 月 18 日 15:18（GMT+2）**
+* **更新时间**：**2026 年 10 月 18 日 15:30（GMT+2）**
 * **所在分支**：`feature/ksplayer-evaluation`
-  > ⚠️ **主分支安全声明**：根据用户明确要求，本次评估与改造**未对 `main` 主分支做任何修改**，主分支保持绝对干净；待用户在本地或真机充分测试验证通过后，方可安排合并。
+  > ⚠️ **主分支安全声明**：根据用户明确要求，本次评估与改造**未对 `main` 主分支做任何修改**，主分支保持绝对干净；待用户在实体设备（主卧 Apple TV）充分测试 4K 流媒体播放验证通过后，方可安排合并。
 
 ---
 
 ## 🚀 这一版做了什么
 
-针对原先基于系统原生 `AVPlayer` 时无法设置防盗链 `Referer`/`Origin` 请求头（易导致夸克网盘流媒体 403 拒绝）以及对 MKV 容器、DTS/TrueHD 音轨、ASS 外挂字幕支持匮乏的痛点，本版本在本地环境中完成了 **KSPlayer（基于 FFmpeg 内核 + Metal 硬件加速）** 的完整评估与集成试跑。
+针对原先基于系统原生 `AVPlayer` 时无法设置防盗链 `Referer`/`Origin` 请求头（易导致夸克网盘流媒体 403 拒绝）以及对 MKV 容器、DTS/TrueHD 音轨、ASS 外挂字幕支持匮乏的痛点，本版本完成了 **KSPlayer（基于 FFmpeg 内核 + Metal 硬件加速）** 的完整集成、双播放引擎支持，并已成功推送到实体 Apple TV 硬件设备上。
 
 ### 1. 编译环境与工具链修复
 * **Metal 工具链就绪**：针对当前 Xcode 27 编译环境缺少 Metal Toolchain 导致 Shader 无法编译的问题，自动拉取并安装了 `Metal Toolchain 27A5252f` 组件。
@@ -48,7 +48,19 @@
 ### 5. 本地模拟器试跑与验证
 * 在本地 `Apple TV 4K (3rd generation)` tvOS 27 模拟器中完成构建、安装并成功拉起。
 * 新增 `--mock-demo` 参数支持，使模拟器在离线状态下能够自动进入影视库全功能展示状态。
-* 通过 AppleScript 自动将当前工程与正确的 Scheme / Run Destination 加载至 Xcode。
+
+### 6. 实体 Apple TV 硬件设备部署（主卧）与免 Mock 真实 4K 播放
+* **目标硬件设备**：Apple TV 4K（名称：**主卧**，设备 UDID：`00008110-001404CC02F1801E`，架构：`arm64`，系统：`tvOS 26.0+`）。
+* **自动化签名打通**：
+  * 开发团队（Team ID）：`LY2UZ2U7D2`（`aspiring.ad@outlook.com`）。
+  * 在 [generate_xcode_project.py](file:///Users/wangbin/Documents/antigravity/zealous-darwin/quark-theater/scripts/generate_xcode_project.py) 中注入 target 属性 `DevelopmentTeam = LY2UZ2U7D2` 与 `ProvisioningStyle = Automatic`。
+  * 成功请求 Apple 开发者中心在线签发：`tvOS Team Provisioning Profile: org.quarktheater.app.wangbin`（UUID: `3bc3ec6e-b646-4c88-82ef-600627c1878c`）。
+* **真机构建与安装**：
+  * 使用 `xcodebuild -destination 'id=00008110-001404CC02F1801E' -allowProvisioningUpdates build` 编译完成，退出码 0（`** BUILD SUCCEEDED **`）。
+  * 通过 `xcrun devicectl device install app` 将 `QuarkTheater.app` 完整同步推送至“主卧”设备。
+* **免 Mock 真实运行状态**：
+  * 通过 `xcrun devicectl device process launch` 直接在“主卧”电视上启动应用，完全脱离 Mock 模式。
+  * 电视端已处于准备登录与扫码状态，支持加载真实网盘目录并进行真实 4K 码率视频流播放。
 
 ---
 
@@ -60,14 +72,8 @@
 
 ---
 
-## 🛠️ 下一步操作指引
+## 🛠️ 后续操作与合并指引
 
-当前代码已完整提交在测试分支：
-```bash
-git status
-# On branch feature/ksplayer-evaluation
-# nothing to commit, working tree clean
-```
-
-1. **测试体验**：在 Mac 上已打开的 Xcode 中直接点击 **Run** 即可开始试跑和体验；
-2. **合并确认**：若测试满意，请随时告知，我将协助您把 `feature/ksplayer-evaluation` 安全合并回 `main` 主分支。
+当前测试分支状态：`feature/ksplayer-evaluation`，主分支 `main` 保持未变。
+1. **电视端扫码与 4K 播放**：请在“主卧”电视前使用夸克 App 扫码登录，选择网盘中的 4K 影片（如 4K MKV/HEVC、高码率原画），测试 KSPlayer 解码是否流畅、音轨字幕切换是否正常。
+2. **合并确认**：待您在“主卧”实测满意后，告知我即可安全地将本分支合并至 `main`。

@@ -109,7 +109,7 @@ def generate() -> dict[Path, str]:
         "CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER": "YES", "GCC_C_LANGUAGE_STANDARD": "gnu17",
     }, shared=True)
     app_config = configurations("app", {
-        "PRODUCT_NAME": "$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER": "org.quarktheater.app",
+        "PRODUCT_NAME": "$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER": "org.quarktheater.app.wangbin",
         "PRODUCT_MODULE_NAME": "QuarkTheater", "GENERATE_INFOPLIST_FILE": "YES",
         "INFOPLIST_KEY_CFBundleDisplayName": "Quark Theater",
         "INFOPLIST_KEY_LSApplicationCategoryType": "public.app-category.entertainment",
@@ -129,7 +129,7 @@ def generate() -> dict[Path, str]:
     dependency = add("dependency:test:app", "isa = PBXTargetDependency; target = " + app_id + "; targetProxy = " + proxy + ";")
     add("target:app", "isa = PBXNativeTarget; buildConfigurationList = " + app_config + "; buildPhases = " + array(app_phases) + "; buildRules = (); dependencies = (); name = QuarkTheater; packageProductDependencies = " + array([ksplayer_product]) + "; productName = QuarkTheater; productReference = " + app_product + '; productType = "com.apple.product-type.application";')
     add("target:test", "isa = PBXNativeTarget; buildConfigurationList = " + test_config + "; buildPhases = " + array(test_phases) + "; buildRules = (); dependencies = " + array([dependency]) + "; name = QuarkTheaterTests; productName = QuarkTheaterTests; productReference = " + test_product + '; productType = "com.apple.product-type.bundle.unit-test";')
-    add("project", 'isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = { ' + app_id + ' = { CreatedOnToolsVersion = 16.0; }; ' + test_id + ' = { CreatedOnToolsVersion = 16.0; TestTargetID = ' + app_id + '; }; }; }; buildConfigurationList = ' + project_config + '; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh-Hans; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base); mainGroup = ' + root_group + '; packageReferences = ' + array([ksplayer_package]) + '; productRefGroup = ' + products + '; projectDirPath = ""; projectRoot = ""; targets = ' + array([app_id, test_id]) + ";")
+    add("project", 'isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = { ' + app_id + ' = { CreatedOnToolsVersion = 16.0; DevelopmentTeam = LY2UZ2U7D2; ProvisioningStyle = Automatic; }; ' + test_id + ' = { CreatedOnToolsVersion = 16.0; TestTargetID = ' + app_id + '; }; }; }; buildConfigurationList = ' + project_config + '; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh-Hans; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base); mainGroup = ' + root_group + '; packageReferences = ' + array([ksplayer_package]) + '; productRefGroup = ' + products + '; projectDirPath = ""; projectRoot = ""; targets = ' + array([app_id, test_id]) + ";")
     pbx = "// !$*UTF8*$!\n{\n\tarchiveVersion = 1;\n\tclasses = {};\n\tobjectVersion = 56;\n\tobjects = {\n"
     pbx += "".join("\t\t" + key + " = { " + value + " };\n" for key, value in sorted(objects.items()))
     pbx += "\t};\n\trootObject = " + project_id + ";\n}\n"
