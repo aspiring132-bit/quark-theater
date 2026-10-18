@@ -32,7 +32,9 @@ struct RootView: View {
                             mediaCatalog: mediaCatalog,
                             onBackToCinema: { selectedTab = .media }
                         )
-                        .padding(.top, 110)
+                        // Handover task 1a: widen the gap below the floating dock so it
+                        // never overlaps Settings content on smaller/odd-ratio screens.
+                        .padding(.top, 140)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -205,7 +207,7 @@ struct RootView: View {
                 )
             }
             .id(account.accountId)
-            .padding(.top, 100)
+            .padding(.top, 140)
         } else {
             VStack(spacing: 24) {
                 Image(systemName: "folder.badge.person.crop").font(.system(size: 72))
@@ -473,84 +475,100 @@ private struct SettingsScreen: View {
                 Text(model.isMock ? "运行模式：Mock（未连接真实服务）" : "运行模式：真实夸克接口 (v2/play 4K极速专线)")
 
                 if let account = model.account {
-                    Text("影视文件夹绑定").font(.title2.bold())
-                    let count = BoundFolderStore.boundFolderIDs(accountID: account.accountId).count
-                    Text("当前已绑定 \(count > 0 ? "\(count) 个文件夹" : "全盘扫描")。绑定文件夹后仅扫描影视目录，加快刮削速度。")
-                        .foregroundStyle(.secondary)
-                    Button {
-                        showFolderSelection = true
-                    } label: {
-                        Label(count > 0 ? "管理绑定文件夹 (\(count) 个)" : "选择要绑定的文件夹", systemImage: "folder.badge.gearshape")
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Text("TMDB 海报刮削设置").font(.title2.bold())
-                Text("内置社区刮削源，支持同音字（蛛丝→蜘蛛侠）智能抗和谐映射与多层目录穿透。")
-                    .foregroundStyle(.secondary)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("刮削源语言首选项").font(.headline)
-                    Picker("刮削源语言", selection: $scraperLanguage) {
-                        Text("中文 (zh-CN) · 自动英文兜底").tag("zh-CN")
-                        Text("English (en-US)").tag("en-US")
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 800)
-                }
-
-                Text("自定义 TMDB Token（可选）").font(.headline)
-                SecureField("自定义 TMDB API Read Access Token", text: $tmdbToken).frame(maxWidth: 900)
-                HStack {
-                    Button("保存自定义 Token") {
-                        do {
-                            try tmdbStore.save(tmdbToken)
-                            tmdbToken = ""
-                            tmdbConfigured = true
-                            settingsMessage = "自定义 TMDB Token 已安全保存。"
-                        } catch {
-                            settingsMessage = error.localizedDescription
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    if tmdbConfigured {
-                        Button("清除自定义 Token", role: .destructive) {
-                            try? tmdbStore.delete()
-                            tmdbConfigured = false
-                            settingsMessage = "已恢复为内置开箱即用 TMDB Key。"
+                    // 影视文件夹绑定 (Focus Section: 保证与上下分组之间方向键直进直出)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("影视文件夹绑定").font(.title2.bold())
+                        let count = BoundFolderStore.boundFolderIDs(accountID: account.accountId).count
+                        Text("当前已绑定 \(count > 0 ? "\(count) 个文件夹" : "全盘扫描")。绑定文件夹后仅扫描影视目录，加快刮削速度。")
+                            .foregroundStyle(.secondary)
+                        Button {
+                            showFolderSelection = true
+                        } label: {
+                            Label(count > 0 ? "管理绑定文件夹 (\(count) 个)" : "选择要绑定的文件夹", systemImage: "folder.badge.gearshape")
                         }
                         .buttonStyle(.bordered)
                     }
+                    .focusSection()
                 }
 
-                Text("播放偏好").font(.title2.bold())
-                Toggle("剧集自动连播下一集", isOn: $autoPlayNextEpisode)
-                    .frame(maxWidth: 800)
-                Picker("跳过时长", selection: $seekInterval) {
-                    Text("10 秒").tag(10)
-                    Text("15 秒").tag(15)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 800)
-                .onChange(of: seekInterval) { _, value in
-                    if value != 10 && value != 15 { seekInterval = PlayerSeekPreference.defaultInterval }
-                }
-
-                Text("已学习别名").font(.title2.bold())
-                if learnedAliases.isEmpty {
-                    Text("暂无已确认别名。手动确认匹配后会显示在这里。")
+                // TMDB 刮削设置 (Focus Section)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("TMDB 海报刮削设置").font(.title2.bold())
+                    Text("内置社区刮削源，支持同音字（蛛丝→蜘蛛侠）智能抗和谐映射与多层目录穿透。")
                         .foregroundStyle(.secondary)
-                } else {
-                    ForEach(learnedAliases) { alias in
-                        HStack {
-                            Text("\(alias.sourceTitle) → \(alias.canonicalTitle)")
-                            Spacer()
-                            Text(alias.mediaType.rawValue).foregroundStyle(.secondary)
-                            Button("删除", role: .destructive) { removeAlias(alias) }
-                                .buttonStyle(.bordered)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("刮削源语言首选项").font(.headline)
+                        Picker("刮削源语言", selection: $scraperLanguage) {
+                            Text("中文 (zh-CN) · 自动英文兜底").tag("zh-CN")
+                            Text("English (en-US)").tag("en-US")
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 800)
+                    }
+
+                    Text("自定义 TMDB Token（可选）").font(.headline)
+                    SecureField("自定义 TMDB API Read Access Token", text: $tmdbToken).frame(maxWidth: 900)
+                    HStack {
+                        Button("保存自定义 Token") {
+                            do {
+                                try tmdbStore.save(tmdbToken)
+                                tmdbToken = ""
+                                tmdbConfigured = true
+                                settingsMessage = "自定义 TMDB Token 已安全保存。"
+                            } catch {
+                                settingsMessage = error.localizedDescription
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        if tmdbConfigured {
+                            Button("清除自定义 Token", role: .destructive) {
+                                try? tmdbStore.delete()
+                                tmdbConfigured = false
+                                settingsMessage = "已恢复为内置开箱即用 TMDB Key。"
+                            }
+                            .buttonStyle(.bordered)
                         }
                     }
                 }
+                .focusSection()
+
+                // 播放偏好 (Focus Section)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("播放偏好").font(.title2.bold())
+                    Toggle("剧集自动连播下一集", isOn: $autoPlayNextEpisode)
+                        .frame(maxWidth: 800)
+                    Picker("跳过时长", selection: $seekInterval) {
+                        Text("10 秒").tag(10)
+                        Text("15 秒").tag(15)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 800)
+                    .onChange(of: seekInterval) { _, value in
+                        if value != 10 && value != 15 { seekInterval = PlayerSeekPreference.defaultInterval }
+                    }
+                }
+                .focusSection()
+
+                // 已学习别名 (Focus Section)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("已学习别名").font(.title2.bold())
+                    if learnedAliases.isEmpty {
+                        Text("暂无已确认别名。手动确认匹配后会显示在这里。")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(learnedAliases) { alias in
+                            HStack {
+                                Text("\(alias.sourceTitle) → \(alias.canonicalTitle)")
+                                Spacer()
+                                Text(alias.mediaType.rawValue).foregroundStyle(.secondary)
+                                Button("删除", role: .destructive) { removeAlias(alias) }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+                .focusSection()
 
                 // 数据维护与缓存管理 (Focus Section)
                 VStack(alignment: .leading, spacing: 16) {
