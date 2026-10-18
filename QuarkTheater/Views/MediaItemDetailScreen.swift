@@ -332,7 +332,8 @@ struct MediaItemDetailScreen: View {
                 queue: currentSeasonEpisodes.map(\.1),
                 automaticallyPlayNext: autoPlayNextEpisode,
                 history: history,
-                diagnostics: diagnostics
+                diagnostics: diagnostics,
+                backdropURL: item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
             )
         }
         .sheet(isPresented: $showRematchSheet) {

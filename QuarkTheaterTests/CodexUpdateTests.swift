@@ -98,21 +98,50 @@ final class CodexUpdateTests: XCTestCase {
     func testPlayerInputReducerDrawerOpenSuppressesSeek() {
         let state = PlayerInputState(
             isDrawerOpen: true,
-            selectedDrawerTab: "选集列表",
-            focusedTarget: .drawerTab("选集列表"),
+            selectedDrawerTab: "选集",
+            focusedTarget: .drawerTab("选集"),
             canPlayNext: true,
             currentPlaybackTime: 100,
-            duration: 3600
+            duration: 3600,
+            episodeFileIDs: ["ep1", "ep2", "ep3"],
+            subtitleTrackIDs: ["off", "0"],
+            audioTrackIDs: ["0", "1"]
         )
 
+        // Left from leftmost tab stays at none (doesn't seek)
         let leftAction = PlayerInputReducer.reduce(state: state, direction: .left, seekInterval: 10)
         XCTAssertEqual(leftAction, .none)
 
+        // Right from 选集 moves to 字幕
         let rightAction = PlayerInputReducer.reduce(state: state, direction: .right, seekInterval: 15)
-        XCTAssertEqual(rightAction, .none)
+        XCTAssertEqual(rightAction, .focusTarget(.drawerTab("字幕")))
 
+        // Up arrow does NOT close drawer (Requirement: only back/menu key closes drawer)
         let upAction = PlayerInputReducer.reduce(state: state, direction: .up, seekInterval: 10)
-        XCTAssertEqual(upAction, .closeDrawer)
+        XCTAssertEqual(upAction, .none)
+
+        // Down arrow enters content items
+        let downAction = PlayerInputReducer.reduce(state: state, direction: .down, seekInterval: 10)
+        XCTAssertEqual(downAction, .focusTarget(.nextEpisode))
+
+        // Navigate within content area
+        let contentState = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: .nextEpisode,
+            canPlayNext: true,
+            currentPlaybackTime: 100,
+            duration: 3600,
+            episodeFileIDs: ["ep1", "ep2"],
+            subtitleTrackIDs: ["off"],
+            audioTrackIDs: ["0"]
+        )
+        let nextEpAction = PlayerInputReducer.reduce(state: contentState, direction: .right, seekInterval: 10)
+        XCTAssertEqual(nextEpAction, .focusTarget(.episode("ep1")))
+
+        // Up from content returns to tab
+        let upFromContent = PlayerInputReducer.reduce(state: contentState, direction: .up, seekInterval: 10)
+        XCTAssertEqual(upFromContent, .focusTarget(.drawerTab("选集")))
     }
 
     // MARK: - 5. PlaybackPreferences

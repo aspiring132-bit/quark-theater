@@ -30,6 +30,7 @@ struct MediaLibraryScreen: View {
     // Playback state
     @State private var playingFile: CloudFile?
     @State private var playlistQueue: [CloudFile] = []
+    @State private var playingBackdropURL: URL?
 
     // Modals & sheets
     @State private var rematchTarget: RematchSheetTarget?
@@ -397,7 +398,8 @@ struct MediaLibraryScreen: View {
                 queue: playlistQueue,
                 automaticallyPlayNext: autoPlayNextEpisode,
                 history: history,
-                diagnostics: diagnostics
+                diagnostics: diagnostics,
+                backdropURL: playingBackdropURL
             )
         }
         .sheet(item: $matchCandidate) { candidate in
@@ -561,6 +563,7 @@ struct MediaLibraryScreen: View {
                         Button {
                             if let first = episodes.first {
                                 playlistQueue = episodes.map(\.1)
+                                playingBackdropURL = item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
                                 playingFile = first.1
                             }
                         } label: {
@@ -611,6 +614,7 @@ struct MediaLibraryScreen: View {
                                         let epNum = ep.2.episodeNumber ?? (idx + 1)
                                         Button {
                                             playlistQueue = episodes.map(\.1)
+                                            playingBackdropURL = item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
                                             playingFile = ep.1
                                         } label: {
                                             VStack(alignment: .leading, spacing: 4) {

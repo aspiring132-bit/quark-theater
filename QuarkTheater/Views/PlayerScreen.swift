@@ -14,11 +14,12 @@ struct PlayerScreen: View {
     @State private var seekDismissTask: Task<Void, Never>?
     @State private var hintDismissTask: Task<Void, Never>?
     private let diagnostics: Diagnostics
+    private let backdropURL: URL?
 
     @FocusState private var focusedTarget: PlayerFocusTarget?
 
     private enum DrawerTab: String, CaseIterable, Identifiable {
-        case episodes = "选集列表"
+        case episodes = "选集"
         case subtitles = "字幕"
         case audio = "音轨"
         var id: String { rawValue }
@@ -26,8 +27,10 @@ struct PlayerScreen: View {
 
     init(client: QuarkClient, accountID: String, file: CloudFile,
          queue: [CloudFile] = [], automaticallyPlayNext: Bool = false,
-         history: HistoryRepository, diagnostics: Diagnostics) {
+         history: HistoryRepository, diagnostics: Diagnostics,
+         backdropURL: URL? = nil) {
         self.diagnostics = diagnostics
+        self.backdropURL = backdropURL
         _coordinator = StateObject(wrappedValue: PlaybackCoordinator(
             client: client,
             accountID: accountID,
@@ -180,7 +183,10 @@ struct PlayerScreen: View {
             focusedTarget: focusedTarget,
             canPlayNext: coordinator.canPlayNext,
             currentPlaybackTime: 0,
-            duration: 0
+            duration: 0,
+            episodeFileIDs: coordinator.playlistQueue.map(\.fileId),
+            subtitleTrackIDs: ["off"] + coordinator.subtitleTrackNames.indices.map(String.init),
+            audioTrackIDs: coordinator.audioTrackNames.indices.map(String.init)
         )
         let action = PlayerInputReducer.reduce(state: state, direction: direction, seekInterval: PlayerSeekPreference.current)
         switch action {
@@ -189,10 +195,11 @@ struct PlayerScreen: View {
         case .closeDrawer:
             closeDrawer()
         case .focusTarget(let target):
-            if case .episode = target {
-                focusedTarget = coordinator.playlistQueue.first.map { .episode($0.fileId) } ?? target
-            } else {
-                focusedTarget = target
+            focusedTarget = target
+            if case .drawerTab(let tabName) = target, let tab = DrawerTab(rawValue: tabName) {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    selectedDrawerTab = tab
+                }
             }
         case .seek(let dir, let interval):
             coordinator.seek(direction: dir, interval: interval)
@@ -207,7 +214,7 @@ struct PlayerScreen: View {
     private var isTabFocus: Bool {
         guard let focusedTarget else { return true }
         if case .drawerTab = focusedTarget { return true }
-        return focusedTarget == .closeDrawer || focusedTarget == .silentMarker
+        return false
     }
 
     private var defaultContentTarget: PlayerFocusTarget? {
@@ -252,52 +259,32 @@ struct PlayerScreen: View {
     private var drawerPanel: some View {
         VStack(spacing: 0) {
             // ── Tab Bar Row ─────────────────────────────────────────────
-            HStack(alignment: .center, spacing: 20) {
+            HStack(alignment: .center, spacing: 24) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(coordinator.currentPlayingFile.name)
                         .font(.title3.bold())
                         .lineLimit(1)
+                        .truncationMode(.middle)
                     Text("共 \(coordinator.playlistQueue.count) 集 · 字幕 \(coordinator.subtitleTrackNames.count) 轨 · 音频 \(coordinator.audioTrackNames.count) 轨")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: 650, alignment: .leading)
 
                 Spacer()
 
-                // Tab selector buttons — focusable individually
-                HStack(spacing: 12) {
+                // Horizontal Tab selector buttons: [选集]  [字幕]  [音轨]
+                HStack(spacing: 16) {
                     ForEach(DrawerTab.allCases) { tab in
                         tabButton(tab)
                     }
-
-                    Button {
-                        coordinator.markSilent()
-                    } label: {
-                        Label("标记无声", systemImage: coordinator.lastSilentMarkerDate == nil ? "speaker.slash" : "checkmark.circle")
-                            .fixedSize()
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.bordered)
-                    .focused($focusedTarget, equals: .silentMarker)
-
-                    Button {
-                        closeDrawer()
-                    } label: {
-                        Label("收起抽屉", systemImage: "chevron.down.circle.fill")
-                            .fixedSize()
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .focused($focusedTarget, equals: .closeDrawer)
                 }
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 20)
+            .padding(.horizontal, 36)
+            .padding(.vertical, 18)
 
             Divider()
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 28)
 
             // ── Content Row ─────────────────────────────────────────────
             Group {
@@ -307,10 +294,10 @@ struct PlayerScreen: View {
                 case .audio: audioView
                 }
             }
-            .frame(minHeight: 180)
-            .padding(.top, 4)
+            .frame(minHeight: 240)
+            .padding(.top, 8)
         }
-        .padding(.bottom, 28)
+        .padding(.bottom, 24)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
         .overlay(
             RoundedRectangle(cornerRadius: 28)
@@ -320,158 +307,200 @@ struct PlayerScreen: View {
         .padding(.bottom, 24)
     }
 
-    // MARK: - Tab Button
+    // MARK: - Tab Button (Horizontal Pill with Focus Highlight)
     @ViewBuilder
     private func tabButton(_ tab: DrawerTab) -> some View {
         let isSelected = selectedDrawerTab == tab
+        let isFocused = focusedTarget == .drawerTab(tab.rawValue)
+
         Button {
             withAnimation(.easeInOut(duration: 0.18)) {
                 selectedDrawerTab = tab
             }
-            // Move focus to content so the user can immediately navigate items
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 focusedTarget = defaultContentTarget
             }
         } label: {
-            Text(tab.rawValue)
-                .font(.headline)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(isSelected ? Color.cyan.opacity(0.25) : Color.white.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(isSelected ? Color.cyan : Color.clear, lineWidth: 1.5)
-                )
+            HStack(spacing: 8) {
+                Image(systemName: tabIcon(for: tab))
+                    .font(.subheadline)
+                Text(tab.rawValue)
+                    .font(.headline.weight(isFocused || isSelected ? .bold : .medium))
+                    .fixedSize()
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 12)
+            .background(
+                Group {
+                    if isFocused {
+                        Color.white
+                    } else if isSelected {
+                        Color.cyan.opacity(0.28)
+                    } else {
+                        Color.white.opacity(0.08)
+                    }
+                }
+            )
+            .foregroundStyle(isFocused ? Color.black : (isSelected ? Color.cyan : Color.white))
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(
+                        isFocused ? Color.white : (isSelected ? Color.cyan : Color.white.opacity(0.15)),
+                        lineWidth: isFocused ? 2.5 : (isSelected ? 1.5 : 1)
+                    )
+            )
+            .scaleEffect(isFocused ? 1.08 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
         .buttonStyle(.borderless)
         .focused($focusedTarget, equals: .drawerTab(tab.rawValue))
+    }
+
+    private func tabIcon(for tab: DrawerTab) -> String {
+        switch tab {
+        case .episodes: return "film.stack"
+        case .subtitles: return "captions.bubble"
+        case .audio: return "waveform"
+        }
     }
 
     // MARK: - Episodes Content Row
     @ViewBuilder
     private var episodesView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
-                if coordinator.canPlayNext {
-                    Button {
-                        coordinator.playNext()
-                        closeDrawer()
-                    } label: {
-                        VStack(spacing: 8) {
-                            Image(systemName: "forward.end.fill")
-                                .font(.system(size: 28))
-                                .foregroundStyle(.cyan)
-                            Text("下一集")
-                                .font(.headline)
-                        }
-                        .padding(.vertical, 18)
-                        .padding(.horizontal, 24)
-                        .frame(width: 180, height: 120)
-                        .background(Color.cyan.opacity(0.18))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(Color.cyan, lineWidth: 2)
-                        )
+            ScrollViewReader { proxy in
+                HStack(spacing: 20) {
+                    if coordinator.canPlayNext {
+                        nextEpisodeButton
                     }
-                    .buttonStyle(.borderless)
-                    .focused($focusedTarget, equals: .nextEpisode)
-                }
 
-                ForEach(coordinator.playlistQueue) { file in
-                    let isCurrent = file.fileId == coordinator.currentPlayingFile.fileId
-                    Button {
-                        coordinator.playFile(file)
-                        closeDrawer()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                if isCurrent {
-                                    Label("播放中", systemImage: "play.circle.fill")
-                                        .font(.caption.bold())
-                                        .foregroundStyle(.cyan)
-                                } else {
-                                    Image(systemName: "film")
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text(file.fileExtension.uppercased())
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(file.name)
-                                .font(.subheadline)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                            Spacer()
-                            Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                    ForEach(coordinator.playlistQueue) { file in
+                        DrawerEpisodeCard(
+                            file: file,
+                            isCurrent: file.fileId == coordinator.currentPlayingFile.fileId,
+                            isTargetFocused: focusedTarget == .episode(file.fileId),
+                            backdropURL: backdropURL
+                        ) {
+                            coordinator.playFile(file)
+                            closeDrawer()
                         }
-                        .padding(14)
-                        .frame(width: 240, height: 120)
-                        .background(isCurrent ? Color.cyan.opacity(0.12) : Color.white.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(isCurrent ? Color.cyan : Color.white.opacity(0.1),
-                                        lineWidth: isCurrent ? 2 : 1)
-                        )
+                        .id(PlayerFocusTarget.episode(file.fileId))
+                        .focused($focusedTarget, equals: .episode(file.fileId))
                     }
-                    .buttonStyle(.borderless)
-                    .focused($focusedTarget, equals: .episode(file.fileId))
+                }
+                .padding(.horizontal, 32)
+                .padding(.vertical, 16)
+                .onChange(of: focusedTarget) { _, target in
+                    if let target {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            proxy.scrollTo(target, anchor: .center)
+                        }
+                    }
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
         }
+    }
+
+    private var nextEpisodeButton: some View {
+        let isFocused = focusedTarget == .nextEpisode
+        return Button {
+            coordinator.playNext()
+            closeDrawer()
+        } label: {
+            VStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(isFocused ? Color.cyan : Color.cyan.opacity(0.2))
+                        .frame(width: 72, height: 72)
+                    Image(systemName: "forward.end.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(isFocused ? Color.black : Color.cyan)
+                }
+
+                VStack(spacing: 4) {
+                    Text("播放下一集")
+                        .font(.headline.weight(isFocused ? .bold : .semibold))
+                        .foregroundStyle(isFocused ? .white : .primary)
+                    Text("自动连播")
+                        .font(.caption2)
+                        .foregroundStyle(isFocused ? Color.white.opacity(0.8) : .secondary)
+                }
+            }
+            .frame(width: 200, height: 190)
+            .background(isFocused ? Color.white.opacity(0.15) : Color.cyan.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(isFocused ? Color.cyan : Color.cyan.opacity(0.5), lineWidth: isFocused ? 3.5 : 1.5)
+            )
+            .shadow(
+                color: isFocused ? Color.cyan.opacity(0.55) : Color.clear,
+                radius: 14,
+                x: 0,
+                y: 6
+            )
+            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
+        }
+        .buttonStyle(.borderless)
+        .id(PlayerFocusTarget.nextEpisode)
+        .focused($focusedTarget, equals: .nextEpisode)
     }
 
     // MARK: - Subtitles Content Row
     @ViewBuilder
     private var subtitlesView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
-                let isOff = coordinator.selectedSubtitleIndex == nil
-                Button {
-                    coordinator.selectSubtitle(nil)
-                } label: {
-                    subtitleAudioLabel(
+            ScrollViewReader { proxy in
+                HStack(spacing: 16) {
+                    let isOff = coordinator.selectedSubtitleIndex == nil
+                    let isOffFocused = focusedTarget == .subtitle("off")
+                    subtitleAudioCard(
                         icon: isOff ? "checkmark.circle.fill" : "circle",
                         title: "关闭字幕",
                         subtitle: "关",
-                        isSelected: isOff
-                    )
-                }
-                .buttonStyle(.borderless)
-                .focused($focusedTarget, equals: .subtitle("off"))
+                        isSelected: isOff,
+                        isFocused: isOffFocused
+                    ) {
+                        coordinator.selectSubtitle(nil)
+                    }
+                    .id(PlayerFocusTarget.subtitle("off"))
+                    .focused($focusedTarget, equals: .subtitle("off"))
 
-                let names = coordinator.subtitleTrackNames
-                if names.isEmpty {
-                    Text("未检测到内嵌字幕轨，支持外挂 SRT/ASS 格式。")
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 24)
-                } else {
-                    ForEach(names.indices, id: \.self) { index in
-                        let isSelected = coordinator.selectedSubtitleIndex == index
-                        Button {
-                            coordinator.selectSubtitle(index)
-                        } label: {
-                            subtitleAudioLabel(
+                    let names = coordinator.subtitleTrackNames
+                    if names.isEmpty {
+                        Text("未检测到内嵌字幕轨，支持外挂 SRT/ASS 格式。")
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 24)
+                    } else {
+                        ForEach(names.indices, id: \.self) { index in
+                            let isSelected = coordinator.selectedSubtitleIndex == index
+                            let isFocused = focusedTarget == .subtitle(String(index))
+                            subtitleAudioCard(
                                 icon: isSelected ? "checkmark.circle.fill" : "circle",
                                 title: names[index],
                                 subtitle: "字幕轨 #\(index + 1)",
-                                isSelected: isSelected
-                            )
+                                isSelected: isSelected,
+                                isFocused: isFocused
+                            ) {
+                                coordinator.selectSubtitle(index)
+                            }
+                            .id(PlayerFocusTarget.subtitle(String(index)))
+                            .focused($focusedTarget, equals: .subtitle(String(index)))
                         }
-                        .buttonStyle(.borderless)
-                        .focused($focusedTarget, equals: .subtitle(String(index)))
+                    }
+                }
+                .padding(.horizontal, 32)
+                .padding(.vertical, 16)
+                .onChange(of: focusedTarget) { _, target in
+                    if let target {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            proxy.scrollTo(target, anchor: .center)
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
         }
     }
 
@@ -479,59 +508,112 @@ struct PlayerScreen: View {
     @ViewBuilder
     private var audioView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
-                let names = coordinator.audioTrackNames
-                if names.isEmpty {
-                    Text("当前使用系统默认立体声音频流。")
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 24)
-                } else {
-                    ForEach(names.indices, id: \.self) { index in
-                        let isSelected = coordinator.selectedAudioIndex == index
-                        Button {
-                            coordinator.selectAudio(index)
-                        } label: {
-                            subtitleAudioLabel(
+            ScrollViewReader { proxy in
+                HStack(spacing: 16) {
+                    let names = coordinator.audioTrackNames
+                    if names.isEmpty {
+                        Text("当前使用系统默认立体声音频流。")
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 24)
+                    } else {
+                        ForEach(names.indices, id: \.self) { index in
+                            let isSelected = coordinator.selectedAudioIndex == index
+                            let isFocused = focusedTarget == .audio(String(index))
+                            subtitleAudioCard(
                                 icon: isSelected ? "speaker.wave.3.fill" : "speaker.wave.1",
                                 title: names[index],
                                 subtitle: "音轨 #\(index + 1)",
-                                isSelected: isSelected
-                            )
+                                isSelected: isSelected,
+                                isFocused: isFocused
+                            ) {
+                                coordinator.selectAudio(index)
+                            }
+                            .id(PlayerFocusTarget.audio(String(index)))
+                            .focused($focusedTarget, equals: .audio(String(index)))
                         }
-                        .buttonStyle(.borderless)
-                        .focused($focusedTarget, equals: .audio(String(index)))
+                    }
+                }
+                .padding(.horizontal, 32)
+                .padding(.vertical, 16)
+                .onChange(of: focusedTarget) { _, target in
+                    if let target {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            proxy.scrollTo(target, anchor: .center)
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
         }
     }
 
-    // MARK: - Shared Item Label
+    // MARK: - Shared Subtitle/Audio Card
     @ViewBuilder
-    private func subtitleAudioLabel(icon: String, title: String, subtitle: String, isSelected: Bool) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(isSelected ? .cyan : .secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+    private func subtitleAudioCard(
+        icon: String,
+        title: String,
+        subtitle: String,
+        isSelected: Bool,
+        isFocused: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(isFocused ? Color.black : (isSelected ? Color.cyan : Color.secondary))
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline.weight(isFocused || isSelected ? .bold : .medium))
+                        .foregroundStyle(isFocused ? Color.black : Color.white)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(isFocused ? Color.black.opacity(0.7) : Color.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(isFocused ? Color.black : Color.cyan)
+                }
             }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .frame(minWidth: 220, maxWidth: 320, minHeight: 76)
+            .background(
+                Group {
+                    if isFocused {
+                        Color.white
+                    } else if isSelected {
+                        Color.cyan.opacity(0.2)
+                    } else {
+                        Color.white.opacity(0.06)
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(
+                        isFocused ? Color.white : (isSelected ? Color.cyan : Color.white.opacity(0.12)),
+                        lineWidth: isFocused ? 2.5 : (isSelected ? 1.5 : 1)
+                    )
+            )
+            .shadow(
+                color: isFocused ? Color.white.opacity(0.35) : Color.clear,
+                radius: 12,
+                x: 0,
+                y: 4
+            )
+            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
-        .padding(18)
-        .frame(minWidth: 200, minHeight: 90)
-        .background(isSelected ? Color.cyan.opacity(0.15) : Color.white.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(isSelected ? Color.cyan : Color.white.opacity(0.1),
-                        lineWidth: isSelected ? 2 : 1)
-        )
+        .buttonStyle(.borderless)
     }
 
     // MARK: - Speed Badge View
@@ -566,5 +648,195 @@ struct PlayerScreen: View {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             withAnimation(.easeOut(duration: 0.3)) { isSeeking = false }
         }
+    }
+}
+
+// MARK: - Drawer Episode Card with Whole-Card Focus & Thumbnail Preview
+private struct DrawerEpisodeCard: View {
+    let file: CloudFile
+    let isCurrent: Bool
+    let isTargetFocused: Bool
+    let backdropURL: URL?
+    let action: () -> Void
+
+    @Environment(\.isFocused) private var isEnvironmentFocused
+
+    private var isFocused: Bool {
+        isTargetFocused || isEnvironmentFocused
+    }
+
+    private var parsed: ParsedMediaName {
+        FilenameParser.parse(file.name)
+    }
+
+    private var cardTitle: String {
+        if let ep = parsed.episodeNumber {
+            return "第 \(ep) 集 · \(file.name)"
+        }
+        return file.name
+    }
+
+    private var cardBorderColor: Color {
+        if isFocused { return Color.cyan }
+        if isCurrent { return Color.cyan.opacity(0.7) }
+        return Color.white.opacity(0.12)
+    }
+
+    private var cardBorderWidth: CGFloat {
+        if isFocused { return 3.5 }
+        if isCurrent { return 2.0 }
+        return 1.0
+    }
+
+    private var infoBackgroundColor: Color {
+        if isFocused { return Color.white.opacity(0.18) }
+        if isCurrent { return Color.cyan.opacity(0.14) }
+        return Color.white.opacity(0.06)
+    }
+
+    private var sizeString: String {
+        ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)
+    }
+
+    private var tagString: String {
+        let lower = file.name.lowercased()
+        if lower.contains("4k") || lower.contains("2160p") { return "4K" }
+        if lower.contains("1080p") { return "1080P" }
+        if lower.contains("720p") { return "720P" }
+        return file.fileExtension.uppercased()
+    }
+
+    @ViewBuilder
+    private var infoArea: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(cardTitle)
+                .font(.subheadline.weight(isFocused ? .bold : .medium))
+                .foregroundStyle(isFocused ? Color.white : Color.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            HStack {
+                Text(sizeString)
+                    .font(.caption2)
+                    .foregroundStyle(isFocused ? Color.white.opacity(0.9) : Color.secondary)
+
+                Spacer()
+
+                Text(tagString)
+                    .font(.caption2.bold())
+                    .foregroundStyle(isCurrent ? Color.cyan : (isFocused ? Color.white : Color.secondary))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(width: 280, height: 75, alignment: .leading)
+        .background(infoBackgroundColor)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 0) {
+                thumbnailBanner
+                    .frame(width: 280, height: 115)
+                    .clipped()
+
+                infoArea
+            }
+            .frame(width: 280, height: 190)
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(cardBorderColor, lineWidth: cardBorderWidth)
+            )
+            .shadow(
+                color: isFocused ? Color.cyan.opacity(0.6) : Color.black.opacity(0.35),
+                radius: isFocused ? 14 : 6,
+                x: 0,
+                y: isFocused ? 6 : 2
+            )
+            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
+        }
+        .buttonStyle(.borderless)
+    }
+
+    @ViewBuilder
+    private var thumbnailBanner: some View {
+        ZStack(alignment: .center) {
+            if let backdropURL {
+                AsyncImage(url: backdropURL) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    placeholderBackground
+                }
+            } else {
+                placeholderBackground
+            }
+
+            // Dark vignette overlay
+            LinearGradient(
+                colors: [.black.opacity(0.15), .black.opacity(0.65)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            // Center Play Icon (grows on focus)
+            Image(systemName: isCurrent ? "waveform" : "play.circle.fill")
+                .font(.system(size: isFocused ? 34 : 26))
+                .foregroundStyle(isCurrent ? Color.cyan : (isFocused ? Color.white : Color.white.opacity(0.65)))
+                .shadow(color: .black.opacity(0.8), radius: 4)
+
+            // Top Badges
+            VStack {
+                HStack {
+                    if isCurrent {
+                        HStack(spacing: 4) {
+                            Circle().fill(Color.cyan).frame(width: 6, height: 6)
+                            Text("播放中")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.cyan)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial, in: Capsule())
+                    } else if let ep = parsed.episodeNumber {
+                        Text("第 \(ep) 集")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+
+                    Spacer()
+
+                    Text(file.fileExtension.uppercased())
+                        .font(.caption2.bold())
+                        .foregroundStyle(isFocused ? Color.cyan : Color.white.opacity(0.85))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
+                }
+                .padding(8)
+
+                Spacer()
+            }
+        }
+    }
+
+    private var placeholderBackground: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.14, green: 0.17, blue: 0.24),
+                Color(red: 0.08, green: 0.10, blue: 0.16)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay(
+            Image(systemName: "film")
+                .font(.system(size: 32))
+                .foregroundStyle(Color.white.opacity(0.1))
+        )
     }
 }
