@@ -10,11 +10,75 @@ struct DiagnosticEntry: Identifiable {
 @MainActor
 final class Diagnostics: ObservableObject {
     @Published private(set) var entries: [DiagnosticEntry] = []
+    @Published private(set) var records: [DiagnosticRecord]
+    @Published private(set) var storageFailure: DiagnosticsStoreFailure?
+    let store: DiagnosticsStore
+    private var operationTail: Task<Void, Never> = Task {}
+    private var lastFocusTarget: DiagnosticFocusTarget?
+    private var lastFocusDate: Date?
+    private let focusTransitionMinimumInterval: TimeInterval = 0.2
+
+    init(store: DiagnosticsStore = DiagnosticsStore()) {
+        self.store = store
+        self.records = store.initialRecords
+        self.storageFailure = nil
+        self.lastFocusTarget = nil
+        self.lastFocusDate = nil
+        operationTail = Task { @MainActor [weak self, store] in
+            let loaded = await store.recent()
+            guard let self else { return }
+            self.records = loaded
+        }
+    }
 
     /// Call only with application-owned messages. Never pass response bodies, URLs or credentials.
     func record(_ message: String) {
         entries.insert(DiagnosticEntry(message: message), at: 0)
         if entries.count > 100 { entries.removeLast(entries.count - 100) }
+        record(category: .navigation, level: .debug, event: .legacyMessage)
+    }
+
+    func makeCorrelationID() -> DiagnosticCorrelationID {
+        store.makeCorrelationID()
+    }
+
+    func record(
+        category: DiagnosticCategory,
+        level: DiagnosticLevel,
+        event: DiagnosticEvent,
+        correlationID: DiagnosticCorrelationID? = nil,
+        metadata: [DiagnosticMetadata] = []
+    ) {
+        enqueue { [weak self, store] in
+            let result = await store.append(category: category, level: level, event: event, correlationID: correlationID, metadata: metadata)
+            guard let self else { return }
+            switch result {
+            case .success(let record):
+                self.storageFailure = nil
+                self.records.insert(record, at: 0)
+                if self.records.count > DiagnosticsStore.maxVisibleRecords {
+                    self.records.removeLast(self.records.count - DiagnosticsStore.maxVisibleRecords)
+                }
+            case .failure(let failure):
+                self.storageFailure = failure
+            }
+        }
+    }
+
+    /// Records only coarse, allowlisted focus regions. Repeated transitions are
+    /// collapsed so remote focus churn cannot flood the persistent log.
+    func recordFocusTransition(_ target: DiagnosticFocusTarget, now: Date = Date()) {
+        if target == lastFocusTarget {
+            return
+        }
+        if let lastFocusDate,
+           now.timeIntervalSince(lastFocusDate) < focusTransitionMinimumInterval {
+            return
+        }
+        lastFocusTarget = target
+        lastFocusDate = now
+        record(category: .navigation, level: .debug, event: .focusChanged,
+               metadata: [.focusTarget(target)])
     }
 
     func recordError(_ error: Error, context: String) {
@@ -33,7 +97,62 @@ final class Diagnostics: ObservableObject {
         }
     }
 
-    func clear() { entries.removeAll() }
+    @discardableResult
+    func clear() -> Task<Result<Void, DiagnosticsStoreFailure>, Never> {
+        enqueueResult { [weak self, store] in
+            let result = await store.clear()
+            if let self {
+                switch result {
+                case .success:
+                    self.storageFailure = nil
+                    self.entries.removeAll()
+                    self.records.removeAll()
+                case .failure(let failure):
+                    self.storageFailure = failure
+                }
+            }
+            return result
+        }
+    }
+
+    func export() async -> Result<URL, DiagnosticsStoreFailure> {
+        await enqueueResult { [weak self, store] in
+            let result = await store.export()
+            if let self {
+                switch result {
+                case .success:
+                    self.storageFailure = nil
+                case .failure(let failure):
+                    self.storageFailure = failure
+                }
+            }
+            return result
+        }.value
+    }
+
+    func waitForPendingOperations() async {
+        await operationTail.value
+    }
+
+    private func enqueue(_ operation: @escaping @MainActor () async -> Void) {
+        let previous = operationTail
+        operationTail = Task { @MainActor in
+            await previous.value
+            await operation()
+        }
+    }
+
+    private func enqueueResult<T>(_ operation: @escaping @MainActor () async -> T) -> Task<T, Never> {
+        let previous = operationTail
+        let task = Task { @MainActor in
+            await previous.value
+            return await operation()
+        }
+        operationTail = Task { @MainActor in
+            _ = await task.value
+        }
+        return task
+    }
 }
 
 func userFacingError(_ error: Error) -> String {

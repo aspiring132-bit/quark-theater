@@ -5,6 +5,7 @@ struct TMDBMatchScreen: View {
     let candidate: ScannedMediaCandidate?
     let existingItem: MediaItem?
     let relatedFiles: [CloudFile]
+    let relatedCandidates: [ScannedMediaCandidate]
     let accountID: String
     let tokenStore: TMDBCredentialStore
     let catalog: MediaCatalogRepository
@@ -18,13 +19,49 @@ struct TMDBMatchScreen: View {
     @State private var loading = false
     @State private var errorMessage: String?
     @State private var selectedID: Int?
+    @FocusState private var focusedTarget: MatchFocusTarget?
     @AppStorage("scraperLanguage") private var scraperLanguage = "zh-CN"
+
+    private enum MatchFocusTarget: Hashable {
+        case search
+        case result(Int)
+        case close
+    }
+
+    /// Keeps season/episode extraction deterministic for batch rematches.
+    /// Exposed internally so the parser behavior can be regression-tested
+    /// without constructing a SwiftUI view.
+    static func parsedMetadata(for file: CloudFile, candidate: ScannedMediaCandidate?, existingItem: MediaItem?) -> ParsedMediaName {
+        if let candidate, candidate.file.fileId == file.fileId {
+            return candidate.parsedName
+        }
+        return FilenameParser.parse(
+            file.name,
+            detectedShowTitle: existingItem?.title ?? candidate?.parsedName.title,
+            detectedSeasonNumber: existingItem?.seasonNumber ?? candidate?.parsedName.seasonNumber
+        )
+    }
+
+    /// Keeps a rematch candidate for every file, including files that were
+    /// loaded from confirmed metadata after the original scan was discarded.
+    /// The synthesized candidate preserves that file's own season/episode
+    /// context instead of falling back to the initiating item.
+    static func rematchCandidate(
+        for file: CloudFile,
+        parsedName: ParsedMediaName,
+        candidates: [ScannedMediaCandidate]
+    ) -> ScannedMediaCandidate {
+        candidates.first(where: { $0.file.fileId == file.fileId }) ??
+            ScannedMediaCandidate(file: file, parsedName: parsedName,
+                                  parentFolderName: nil, ancestorFolderName: nil)
+    }
 
     init(candidate: ScannedMediaCandidate, accountID: String, tokenStore: TMDBCredentialStore,
          catalog: MediaCatalogRepository, diagnostics: Diagnostics, onSaved: @escaping () -> Void) {
         self.candidate = candidate
         self.existingItem = nil
         self.relatedFiles = [candidate.file]
+        self.relatedCandidates = [candidate]
         self.accountID = accountID
         self.tokenStore = tokenStore
         self.catalog = catalog
@@ -34,11 +71,12 @@ struct TMDBMatchScreen: View {
         _selectedMediaType = State(initialValue: candidate.parsedName.mediaType)
     }
 
-    init(item: MediaItem, relatedFiles: [CloudFile], accountID: String, tokenStore: TMDBCredentialStore,
+    init(item: MediaItem, relatedFiles: [CloudFile], relatedCandidates: [ScannedMediaCandidate] = [], accountID: String, tokenStore: TMDBCredentialStore,
          catalog: MediaCatalogRepository, diagnostics: Diagnostics, onSaved: @escaping () -> Void) {
         self.candidate = nil
         self.existingItem = item
         self.relatedFiles = relatedFiles
+        self.relatedCandidates = relatedCandidates
         self.accountID = accountID
         self.tokenStore = tokenStore
         self.catalog = catalog
@@ -63,6 +101,7 @@ struct TMDBMatchScreen: View {
                 HStack(spacing: 16) {
                     TextField("输入影视名称搜索", text: $queryText)
                         .frame(maxWidth: 550)
+                        .focused($focusedTarget, equals: .search)
                     Picker("类型", selection: $selectedMediaType) {
                         Text("电影").tag(MediaType.movie)
                         Text("电视剧").tag(MediaType.series)
@@ -92,6 +131,7 @@ struct TMDBMatchScreen: View {
                             let isSelected = selectedID == match.result.id
                             Button {
                                 selectedID = match.result.id
+                                focusedTarget = .result(match.result.id)
                             } label: {
                                 HStack(spacing: 20) {
                                     posterThumb(match.result.posterPath)
@@ -126,6 +166,7 @@ struct TMDBMatchScreen: View {
                                 )
                             }
                             .buttonStyle(.borderless)
+                            .focused($focusedTarget, equals: .result(match.result.id))
                         }
                     }
                 }
@@ -153,12 +194,20 @@ struct TMDBMatchScreen: View {
                 } else {
                     Button("关闭", role: .cancel) { dismiss() }
                         .buttonStyle(.bordered)
+                        .focused($focusedTarget, equals: .close)
                 }
             }
             .frame(maxWidth: 1400, alignment: .leading)
             .padding(60)
         }
         .background(Color.black.opacity(0.95).ignoresSafeArea())
+        .onChange(of: focusedTarget) { _, target in
+            switch target {
+            case .search: diagnostics.recordFocusTransition(.tmdbSearch)
+            case .result: diagnostics.recordFocusTransition(.tmdbResult)
+            default: break
+            }
+        }
         .task { await search() }
     }
 
@@ -200,16 +249,19 @@ struct TMDBMatchScreen: View {
         do {
             let parsed = ParsedMediaName(title: cleanQuery, year: nil, mediaType: selectedMediaType, seasonNumber: nil, episodeNumber: nil, inferredFromParent: false)
             let token = tokenStore.effectiveToken()
-            let raw = try await TMDBService().search(parsed, apiReadToken: token, language: scraperLanguage)
+            let raw = try await TMDBService(diagnostics: diagnostics).search(parsed, apiReadToken: token, language: scraperLanguage)
             results = MediaMatchScorer.rank(raw, for: parsed)
+            selectedID = results.first?.result.id
+            focusedTarget = results.first.map { .result($0.result.id) } ?? .search
             if results.isEmpty {
                 errorMessage = "TMDB 未搜索到与“\(cleanQuery)”相关的影视。可尝试输入中文或英文官方片名重新搜索。"
-            } else if selectedID == nil {
-                selectedID = results.first?.result.id
             }
         } catch {
             errorMessage = error.localizedDescription
             diagnostics.recordError(error, context: "TMDB 搜索")
+            results = []
+            selectedID = nil
+            focusedTarget = .search
         }
     }
 
@@ -218,6 +270,14 @@ struct TMDBMatchScreen: View {
         let filesToSave = relatedFiles.isEmpty ? (candidate.map { [$0.file] } ?? []) : relatedFiles
         do {
             for file in filesToSave {
+                // A batch rematch may contain files from multiple seasons;
+                // parse each filename independently rather than copying the
+                // initiating item's episode number to every row.
+                let parsedForFile = Self.parsedMetadata(
+                    for: file,
+                    candidate: relatedCandidates.first(where: { $0.file.fileId == file.fileId }) ?? candidate,
+                    existingItem: existingItem
+                )
                 let item = MediaItem(
                     id: file.fileId,
                     fileId: file.fileId,
@@ -231,11 +291,23 @@ struct TMDBMatchScreen: View {
                     duration: nil,
                     matchConfidence: match.confidence,
                     rating: result.voteAverage,
-                    genreIDs: result.genreIDs
+                    genreIDs: result.genreIDs,
+                    seasonNumber: parsedForFile.seasonNumber,
+                    episodeNumber: parsedForFile.episodeNumber
                 )
                 try catalog.confirm(item, accountID: accountID)
             }
-            diagnostics.record("已确认 TMDB 匹配并应用到 \(filesToSave.count) 个文件：\(result.displayTitle)")
+            if let candidate,
+               candidate.parsedName.unresolvedReason == nil,
+               !candidate.parsedName.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try catalog.learnAlias(accountID: accountID, mediaType: selectedMediaType,
+                                       sourceTitle: candidate.parsedName.title,
+                                       canonicalTitle: result.displayTitle, tmdbID: result.id)
+            }
+            diagnostics.record(category: .scraping, level: .notice, event: .scrapingSearchCompleted,
+                               metadata: [.host(.tmdbAPI), .stage(.persistence), .status(.completed),
+                                          .outcome(.succeeded), .aliasProvenance(.manualConfirmation),
+                                          .candidateCount(filesToSave.count)])
             onSaved()
             dismiss()
         } catch {

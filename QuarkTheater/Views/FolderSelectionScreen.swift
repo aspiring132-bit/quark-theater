@@ -1,5 +1,12 @@
 import SwiftUI
 
+enum FolderFocusTarget: Hashable {
+    case breadcrumb(Int)
+    case folderSelect(String)
+    case folderEnter(String)
+    case cancel
+}
+
 @MainActor
 struct FolderSelectionScreen: View {
     let client: QuarkClient
@@ -22,8 +29,9 @@ struct FolderSelectionScreen: View {
     @State private var pathStack: [(id: String, name: String)] = [("0", "我的网盘")]
     @State private var availableFolders: [CloudFile] = []
     @State private var boundFoldersMap: [String: String] = [:] // fileId -> folderName
-    @State private var isLoading = true
+    @State private var isLoading = false
     @State private var errorMessage: String?
+    @FocusState private var focusedTarget: FolderFocusTarget?
 
     private var currentFolder: (id: String, name: String) {
         pathStack.last ?? ("0", "我的网盘")
@@ -105,6 +113,7 @@ struct FolderSelectionScreen: View {
                         dismiss()
                     }
                     .buttonStyle(.bordered)
+                    .focused($focusedTarget, equals: .cancel)
                 }
                 .focusSection()
 
@@ -124,8 +133,9 @@ struct FolderSelectionScreen: View {
                                 .foregroundStyle(.secondary)
                         }
                         Button {
-                            if index < pathStack.count - 1 {
+                            if index < pathStack.count - 1, !isLoading {
                                 pathStack = Array(pathStack.prefix(index + 1))
+                                focusedTarget = .cancel
                                 Task { await loadFolders(folderID: currentFolder.id) }
                             }
                         } label: {
@@ -134,7 +144,8 @@ struct FolderSelectionScreen: View {
                                 .foregroundStyle(index == pathStack.count - 1 ? Color.cyan : Color.white)
                         }
                         .buttonStyle(.borderless)
-                        .disabled(index == pathStack.count - 1)
+                        .focused($focusedTarget, equals: .breadcrumb(index))
+                        .disabled(isLoading || index == pathStack.count - 1)
                     }
 
                     Spacer()
@@ -194,7 +205,9 @@ struct FolderSelectionScreen: View {
                                 },
                                 onEnter: {
                                     enterFolder(folder)
-                                }
+                                },
+                                isDisabled: isLoading,
+                                focusedTarget: $focusedTarget
                             )
                         }
                     }
@@ -205,6 +218,9 @@ struct FolderSelectionScreen: View {
             .frame(maxWidth: 1600, alignment: .leading)
         }
         .background(Color.black.opacity(0.95).ignoresSafeArea())
+        .onChange(of: focusedTarget) { _, target in
+            if let target { diagnostics.recordFocusTransition(FocusDiagnostics.target(for: target)) }
+        }
         .task {
             let names = BoundFolderStore.boundFolderNames(accountID: accountID)
             let ids = BoundFolderStore.boundFolderIDs(accountID: accountID)
@@ -218,28 +234,54 @@ struct FolderSelectionScreen: View {
     }
 
     private func enterFolder(_ folder: CloudFile) {
+        guard !isLoading else { return }
         pathStack.append((id: folder.fileId, name: folder.name))
+        // The source row disappears while the child directory is loading. Keep
+        // focus on an enabled, persistent control until the new rows exist.
+        focusedTarget = .cancel
         Task {
             await loadFolders(folderID: folder.fileId)
         }
     }
 
     private func goBack() {
-        guard pathStack.count > 1 else { return }
+        guard pathStack.count > 1, !isLoading else { return }
         pathStack.removeLast()
+        // The current breadcrumb is intentionally disabled. Use the persistent
+        // close control while loading; loadFolders will move focus to the first
+        // child or an enabled ancestor breadcrumb when the result is known.
+        focusedTarget = .cancel
         Task {
             await loadFolders(folderID: currentFolder.id)
         }
     }
 
     private func loadFolders(folderID: String) async {
+        guard !isLoading else { return }
         isLoading = true
         errorMessage = nil
+        availableFolders = []
         defer { isLoading = false }
         do {
             let page = try await client.listFiles(parentID: folderID, page: 1, pageSize: 100)
             availableFolders = page.files.filter(\.isDirectory).sorted {
                 $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+            if let current = focusedTarget,
+               case let .folderSelect(id) = current,
+               availableFolders.contains(where: { $0.fileId == id }) {
+                focusedTarget = current
+            } else if let current = focusedTarget,
+                      case let .folderEnter(id) = current,
+                      availableFolders.contains(where: { $0.fileId == id }) {
+                focusedTarget = current
+            } else if let first = availableFolders.first {
+                focusedTarget = .folderSelect(first.fileId)
+            } else if pathStack.count > 1 {
+                // The current breadcrumb is disabled. Focus its enabled parent.
+                focusedTarget = .breadcrumb(pathStack.count - 2)
+            } else {
+                focusedTarget = .cancel
             }
 
             // Auto pre-select likely media folders on very first launch
@@ -254,6 +296,9 @@ struct FolderSelectionScreen: View {
             }
         } catch {
             errorMessage = userFacingError(error)
+            // Folder rows may have been removed by the failed navigation. The
+            // cancel button remains visible and enabled in every state.
+            focusedTarget = .cancel
             diagnostics.recordError(error, context: "读取网盘目录 [\(folderID)]")
         }
     }
@@ -274,6 +319,8 @@ private struct FolderItemRow: View {
     let isSelected: Bool
     let onToggleSelect: () -> Void
     let onEnter: () -> Void
+    let isDisabled: Bool
+    let focusedTarget: FocusState<FolderFocusTarget?>.Binding
 
     var body: some View {
         HStack(spacing: 12) {
@@ -307,6 +354,8 @@ private struct FolderItemRow: View {
                 )
             }
             .buttonStyle(.card)
+            .focused(focusedTarget, equals: .folderSelect(folder.fileId))
+            .disabled(isDisabled)
 
             // Drill down into subfolder button
             Button(action: onEnter) {
@@ -320,6 +369,8 @@ private struct FolderItemRow: View {
                 .padding(.vertical, 22)
             }
             .buttonStyle(.bordered)
+            .focused(focusedTarget, equals: .folderEnter(folder.fileId))
+            .disabled(isDisabled)
         }
     }
 }

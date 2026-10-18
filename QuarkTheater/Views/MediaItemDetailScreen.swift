@@ -19,7 +19,46 @@ struct MediaItemDetailScreen: View {
     @State private var showRematchSheet = false
     @State private var selectedSeason: Int = 1
     @State private var watchProgressByFileId: [String: Double] = [:]
+    @FocusState private var focusedEpisodeID: String?
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
+
+    /// Builds one rematch candidate per confirmed file. Confirmed metadata is
+    /// retained as the fallback when the original scanner candidates were not
+    /// persisted, so identical names in different season folders keep their
+    /// own season/episode context.
+    static func rematchCandidates(for related: [MediaItem], candidates: [ScannedMediaCandidate]) -> [ScannedMediaCandidate] {
+        let candidateByFileID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.file.fileId, $0) })
+        return related.compactMap { metadata in
+            let candidate = candidateByFileID[metadata.fileId]
+            let file = candidate?.file ?? CloudFile(
+                fileId: metadata.fileId,
+                parentId: "0",
+                name: metadata.title,
+                size: 0,
+                fileExtension: "mp4",
+                modifiedAt: nil,
+                isDirectory: false
+            )
+            let parsed = candidate?.parsedName ?? FilenameParser.parse(
+                file.name,
+                detectedShowTitle: metadata.title,
+                detectedSeasonNumber: metadata.seasonNumber
+            )
+            let effectiveParsed = ParsedMediaName(
+                title: parsed.title,
+                year: parsed.year,
+                mediaType: metadata.mediaType,
+                seasonNumber: metadata.seasonNumber ?? parsed.seasonNumber,
+                episodeNumber: metadata.episodeNumber ?? parsed.episodeNumber,
+                inferredFromParent: parsed.inferredFromParent
+            )
+            return TMDBMatchScreen.rematchCandidate(
+                for: file,
+                parsedName: effectiveParsed,
+                candidates: candidates
+            )
+        }
+    }
 
     private var fileByID: [String: CloudFile] {
         Dictionary(uniqueKeysWithValues: candidates.map { ($0.file.fileId, $0.file) })
@@ -209,8 +248,7 @@ struct MediaItemDetailScreen: View {
                     .padding(.horizontal, 60)
 
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 24), count: 3), spacing: 24) {
-                        ForEach(currentSeasonEpisodes.indices, id: \.self) { index in
-                            let entry = currentSeasonEpisodes[index]
+                        ForEach(currentSeasonEpisodes, id: \.1.fileId) { entry in
                             episodeCard(entry.0, file: entry.1, parsed: entry.2)
                         }
                     }
@@ -226,6 +264,7 @@ struct MediaItemDetailScreen: View {
             favoriteIDs = (try? catalog.favoriteFileIDs(accountID: accountID)) ?? []
             if let firstSeason = sortedSeasons.first {
                 selectedSeason = firstSeason
+                focusedEpisodeID = seasonGroups[firstSeason]?.first?.1.fileId
             }
             // Load watch history progress
             for ep in episodes {
@@ -234,6 +273,9 @@ struct MediaItemDetailScreen: View {
                     watchProgressByFileId[ep.1.fileId] = record.positionSeconds / record.durationSeconds
                 }
             }
+        }
+        .onChange(of: selectedSeason) { _, season in
+            focusedEpisodeID = seasonGroups[season]?.first?.1.fileId
         }
         .fullScreenCover(item: $selectedFile) { file in
             PlayerScreen(
@@ -250,6 +292,7 @@ struct MediaItemDetailScreen: View {
             TMDBMatchScreen(
                 item: item,
                 relatedFiles: episodes.map(\.1),
+                relatedCandidates: Self.rematchCandidates(for: related, candidates: candidates),
                 accountID: accountID,
                 tokenStore: tokenStore,
                 catalog: catalog,
@@ -329,6 +372,7 @@ struct MediaItemDetailScreen: View {
             )
         }
         .buttonStyle(.card)
+        .focused($focusedEpisodeID, equals: file.fileId)
     }
 
     private func setFavorite(_ favorite: Bool) {

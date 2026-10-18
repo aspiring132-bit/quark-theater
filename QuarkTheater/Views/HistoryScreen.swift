@@ -1,5 +1,14 @@
 import SwiftUI
 
+enum HistoryFocusReducer {
+    static func successor(after fileID: String, in records: [WatchHistory]) -> String? {
+        guard let index = records.firstIndex(where: { $0.fileId == fileID }) else { return records.first?.fileId }
+        if index + 1 < records.count { return records[index + 1].fileId }
+        if index > 0 { return records[index - 1].fileId }
+        return nil
+    }
+}
+
 @MainActor
 struct HomeContinueWatchingView: View {
     let repository: HistoryRepository
@@ -112,6 +121,7 @@ struct HistoryScreen: View {
     @State private var errorMessage: String?
     @State private var showClearConfirmation = false
     @State private var selectedFile: CloudFile?
+    @FocusState private var focusedFileID: String?
 
     private var inProgress: [WatchHistory] { records.filter { !$0.completed } }
     private var completed: [WatchHistory] { records.filter(\.completed) }
@@ -123,6 +133,7 @@ struct HistoryScreen: View {
                     Text("观看历史").font(.largeTitle.bold())
                     Spacer()
                     Button("清空此账号历史", role: .destructive) { showClearConfirmation = true }
+                        .focused($focusedFileID, equals: "__history_toolbar__")
                         .disabled(records.isEmpty)
                 }
                 if let errorMessage { Text(errorMessage).foregroundStyle(.orange) }
@@ -132,6 +143,13 @@ struct HistoryScreen: View {
             }.frame(maxWidth: 1400, alignment: .leading).padding(60)
         }
         .task(id: accountID) { reload() }
+        .onChange(of: focusedFileID) { _, target in
+            if target == "__history_toolbar__" {
+                diagnostics.recordFocusTransition(.historyToolbar)
+            } else if target != nil {
+                diagnostics.recordFocusTransition(.historyRow)
+            }
+        }
         .fullScreenCover(item: $selectedFile) { file in
             PlayerScreen(client: client, accountID: accountID, file: file,
                          history: repository, diagnostics: diagnostics)
@@ -169,6 +187,7 @@ struct HistoryScreen: View {
                             }
                         }
                         Button("删除") { remove(item) }
+                            .focused($focusedFileID, equals: item.fileId)
                     }.padding(12)
                     Divider()
                 }
@@ -181,7 +200,12 @@ struct HistoryScreen: View {
         catch { errorMessage = error.localizedDescription }
     }
     private func remove(_ item: WatchHistory) {
-        do { try repository.delete(accountID: accountID, fileID: item.fileId); reload() }
+            let nextFocus = HistoryFocusReducer.successor(after: item.fileId, in: records)
+            do {
+                try repository.delete(accountID: accountID, fileID: item.fileId)
+                reload()
+                focusedFileID = nextFocus ?? (records.isEmpty ? "__history_toolbar__" : records[0].fileId)
+            }
         catch { errorMessage = error.localizedDescription }
     }
 }

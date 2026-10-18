@@ -1,11 +1,18 @@
 import SwiftUI
 
+enum FileBrowserFocusTarget: Hashable {
+    case search
+    case header
+    case file(String)
+}
+
 @MainActor
 struct FileBrowserScreen: View {
     @StateObject private var model: FileBrowserViewModel
     @State private var showPlaybackNotice = false
     @State private var selectedVideo: CloudFile?
     @State private var searchText = ""
+    @FocusState private var focusedTarget: FileBrowserFocusTarget?
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = false
     private let accountID: String
     private let history: HistoryRepository?
@@ -43,10 +50,13 @@ struct FileBrowserScreen: View {
                         .buttonStyle(.bordered)
                         .disabled(model.isLoading)
                 }
+                .focusSection()
 
                 boundFolderSwitcher
                 HStack(spacing: 16) {
-                    TextField("搜索网盘文件名", text: $searchText).frame(maxWidth: 650)
+                    TextField("搜索网盘文件名", text: $searchText)
+                        .frame(maxWidth: 650)
+                        .focused($focusedTarget, equals: .search)
                     Button("搜索") { Task { await model.search(searchText) } }
                         .buttonStyle(.bordered)
                         .disabled(model.isLoading)
@@ -90,7 +100,10 @@ struct FileBrowserScreen: View {
                                 Spacer()
                                 Image(systemName: file.isDirectory ? "chevron.right" : "info.circle")
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                        }.buttonStyle(.bordered).disabled(model.isLoading)
+                        }
+                        .buttonStyle(.bordered)
+                        .focused($focusedTarget, equals: .file(file.fileId))
+                        .disabled(model.isLoading)
                     }
                 }
                 if model.isLoading { ProgressView("正在读取目录") }
@@ -100,6 +113,17 @@ struct FileBrowserScreen: View {
             }.padding(60)
         }
         .task { await model.reload() }
+        .onChange(of: focusedTarget) { _, target in
+            if let target { diagnostics.recordFocusTransition(FocusDiagnostics.target(for: target)) }
+        }
+        .onChange(of: model.files) { _, files in
+            guard !files.isEmpty else {
+                focusedTarget = .search
+                return
+            }
+            if case let .file(id) = focusedTarget, files.contains(where: { $0.fileId == id }) { return }
+            focusedTarget = .file(files[0].fileId)
+        }
         .alert("无法播放此文件", isPresented: $showPlaybackNotice) {
             Button("知道了", role: .cancel) {}
         } message: {

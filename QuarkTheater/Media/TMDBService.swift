@@ -13,6 +13,8 @@ struct TMDBSearchResult: Decodable, Identifiable, Equatable {
     let backdropPath: String?
     let voteAverage: Double?
     let genreIDs: [Int]?
+    /// The endpoint that produced this result. Legacy callers may leave this nil.
+    var sourceMediaType: MediaType?
     var displayTitle: String { title ?? name ?? "未知标题" }
     var effectiveOriginalTitle: String { originalTitle ?? originalName ?? displayTitle }
     var year: Int? { Int((releaseDate ?? firstAirDate ?? "").prefix(4)) }
@@ -22,6 +24,25 @@ struct TMDBSearchResult: Decodable, Identifiable, Equatable {
         case releaseDate = "release_date", firstAirDate = "first_air_date"
         case posterPath = "poster_path", backdropPath = "backdrop_path"
         case voteAverage = "vote_average", genreIDs = "genre_ids"
+    }
+
+    init(id: Int, title: String?, name: String?, originalTitle: String?, originalName: String?,
+         releaseDate: String?, firstAirDate: String?, overview: String?, posterPath: String?,
+         backdropPath: String?, voteAverage: Double?, genreIDs: [Int]?, sourceMediaType: MediaType? = nil) {
+        self.id = id; self.title = title; self.name = name; self.originalTitle = originalTitle; self.originalName = originalName
+        self.releaseDate = releaseDate; self.firstAirDate = firstAirDate; self.overview = overview; self.posterPath = posterPath
+        self.backdropPath = backdropPath; self.voteAverage = voteAverage; self.genreIDs = genreIDs; self.sourceMediaType = sourceMediaType
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id); title = try c.decodeIfPresent(String.self, forKey: .title)
+        name = try c.decodeIfPresent(String.self, forKey: .name); originalTitle = try c.decodeIfPresent(String.self, forKey: .originalTitle)
+        originalName = try c.decodeIfPresent(String.self, forKey: .originalName); releaseDate = try c.decodeIfPresent(String.self, forKey: .releaseDate)
+        firstAirDate = try c.decodeIfPresent(String.self, forKey: .firstAirDate); overview = try c.decodeIfPresent(String.self, forKey: .overview)
+        posterPath = try c.decodeIfPresent(String.self, forKey: .posterPath); backdropPath = try c.decodeIfPresent(String.self, forKey: .backdropPath)
+        voteAverage = try c.decodeIfPresent(Double.self, forKey: .voteAverage); genreIDs = try c.decodeIfPresent([Int].self, forKey: .genreIDs)
+        sourceMediaType = nil
     }
 }
 
@@ -42,23 +63,11 @@ enum TMDBError: Error, LocalizedError {
 struct TMDBService {
     static let builtInAPIKey = "94487d9bbfda56096618e82f65d86377"
     private let session: URLSession
+    private let diagnostics: Diagnostics?
 
-    // Common copyrighted/homophone aliases used in cloud drive shares
-    private static let commonAliases: [String: String] = [
-        "蛛丝": "蜘蛛侠",
-        "蜘蛛": "蜘蛛侠",
-        "蛛网": "蜘蛛侠",
-        "高堡弃人": "高堡奇人",
-        "使女": "使女的故事",
-        "大西洋": "大西洋帝国",
-        "绝命": "绝命毒师",
-        "权游": "权力的游戏",
-        "绝命毒师": "绝命毒师",
-        "西部世界": "西部世界"
-    ]
-
-    init(session: URLSession = .shared) {
+    init(session: URLSession = .shared, diagnostics: Diagnostics? = nil) {
         self.session = session
+        self.diagnostics = diagnostics
     }
 
     func search(
@@ -68,6 +77,8 @@ struct TMDBService {
         parentFolderName: String? = nil,
         ancestorFolderName: String? = nil
     ) async throws -> [TMDBSearchResult] {
+        let correlationID = await diagnostics?.makeCorrelationID()
+        let startedAt = Date()
         let preferredLanguage = language ?? UserDefaults.standard.string(forKey: "scraperLanguage") ?? "zh-CN"
         let token = (apiReadToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveKey = token.isEmpty ? Self.builtInAPIKey : token
@@ -76,43 +87,29 @@ struct TMDBService {
         // Guard against bare number scraping like "(09)" or "9" with no series context
         let isBareNumber = parsed.title.range(of: #"^\(?\d{1,3}\)?$"#, options: .regularExpression) != nil
         if isBareNumber && (parentFolderName == nil || parentFolderName?.contains("来自：") == true) && ancestorFolderName == nil {
+            await recordSearchSummary(correlationID: correlationID, startedAt: startedAt, outcome: .noMatch, candidateCount: 0)
             return [] // Refuse to match bare numbers to movies like "9号谋杀案"
         }
 
-        // Build query candidates cascade
+        // Build query candidates cascade. The order is stable and all variants
+        // are executed; a single successful response must not hide later aliases.
         var rawCandidates: [String] = []
 
         // 1. Base title
         if !isBareNumber {
-            rawCandidates.append(parsed.title)
+            rawCandidates.append(contentsOf: MediaAliasResolver.variants(for: parsed.title))
             let colonStripped = colonStrip(parsed.title)
             if colonStripped != parsed.title { rawCandidates.append(colonStripped) }
             let numStripped = trailingNumberStrip(colonStripped)
             if numStripped != colonStripped && !numStripped.isEmpty { rawCandidates.append(numStripped) }
         }
 
-        // 2. Add alias / homophone replacements (e.g. 蛛丝4 -> 蜘蛛侠4 -> 蜘蛛侠)
-        for (homophone, standard) in Self.commonAliases {
-            for cand in rawCandidates {
-                if cand.contains(homophone) {
-                    let replaced = cand.replacingOccurrences(of: homophone, with: standard)
-                    rawCandidates.append(replaced)
-                    rawCandidates.append(standard)
-                }
-            }
-        }
-
-        // 3. Parent / Ancestor Folder Titles (e.g. "G 高堡奇人S01~S04")
+        // Parent / ancestor folder titles (e.g. "G 高堡奇人S01~S04").
         for folder in [ancestorFolderName, parentFolderName].compactMap({ $0 }) {
             if !folder.contains("来自：") && !folder.contains("网盘") {
                 if let ft = FilenameParser.folderTitle(folder) {
                     rawCandidates.append(ft)
-                    for (homophone, standard) in Self.commonAliases {
-                        if ft.contains(homophone) {
-                            rawCandidates.append(ft.replacingOccurrences(of: homophone, with: standard))
-                            rawCandidates.append(standard)
-                        }
-                    }
+                    rawCandidates.append(contentsOf: MediaAliasResolver.variants(for: ft))
                 }
             }
         }
@@ -130,30 +127,58 @@ struct TMDBService {
                 queryVariants.append(trimmed)
             }
         }
+        // Keep each logical search bounded: at most two query variants and
+        // eight HTTP requests (two media types × two languages per query).
+        // MediaLibrary may perform one learned-alias fallback, so the total
+        // rematch budget remains at most sixteen requests per candidate.
+        queryVariants = Array(queryVariants.prefix(2))
 
-        // 4. Perform search: try each query variant
-        for query in queryVariants {
-            // First try preferred language (zh-CN)
-            let zhResults = try await performSearch(title: query, type: type, key: effectiveKey, language: preferredLanguage)
-            if !zhResults.isEmpty { return zhResults }
-
-            // If zh-CN returned nothing, try en-US
-            if preferredLanguage.hasPrefix("zh") {
-                let enResults = try await performSearch(title: query, type: type, key: effectiveKey, language: "en-US")
-                if !enResults.isEmpty { return enResults }
-            }
-
-            // Also try cross-type search if series failed on tv or movie failed on movie
-            let altType = (type == "tv") ? "movie" : "tv"
-            let altResults = try await performSearch(title: query, type: altType, key: effectiveKey, language: preferredLanguage)
-            if !altResults.isEmpty { return altResults }
+        if queryVariants.isEmpty {
+            await recordSearchSummary(correlationID: correlationID, startedAt: startedAt, outcome: .noMatch, candidateCount: 0)
+            return []
         }
 
-        return []
+        var aggregate: [String: TMDBSearchResult] = [:]
+        var firstError: Error?
+        var requestCount = 0
+        requestLoop: for query in queryVariants {
+            var languages = [preferredLanguage]
+            if preferredLanguage.hasPrefix("zh") { languages.append("en-US") }
+            let types = [type, type == "tv" ? "movie" : "tv"]
+            for requestedType in types {
+                for currentLanguage in languages {
+                    guard requestCount < 8 else { break requestLoop }
+                    requestCount += 1
+                    try Task.checkCancellation()
+                    do {
+                        let rows = try await performSearch(title: query, type: requestedType, key: effectiveKey, language: currentLanguage, correlationID: correlationID)
+                        for var row in rows {
+                            row.sourceMediaType = requestedType == "tv" ? .series : .movie
+                            let key = "\(row.sourceMediaType?.rawValue ?? "unknown"): \(row.id)"
+                            aggregate[key] = aggregate[key] ?? row
+                        }
+                    } catch { firstError = firstError ?? error }
+                }
+            }
+        }
+        if aggregate.isEmpty, let firstError {
+            await recordSearchSummary(correlationID: correlationID, startedAt: startedAt, outcome: .failed, candidateCount: 0)
+            throw firstError
+        }
+        let outcome: DiagnosticOutcome = firstError == nil ? (aggregate.isEmpty ? .noMatch : .succeeded) : .partial
+        await recordSearchSummary(correlationID: correlationID, startedAt: startedAt, outcome: outcome, candidateCount: aggregate.count)
+        return Array(aggregate.values).sorted {
+            let leftType = $0.sourceMediaType?.rawValue ?? ""
+            let rightType = $1.sourceMediaType?.rawValue ?? ""
+            if leftType != rightType { return leftType < rightType }
+            return $0.id < $1.id
+        }
     }
 
-    private func performSearch(title: String, type: String, key: String, language: String) async throws -> [TMDBSearchResult] {
+    private func performSearch(title: String, type: String, key: String, language: String, correlationID: DiagnosticCorrelationID?) async throws -> [TMDBSearchResult] {
+        let startedAt = Date()
         guard var components = URLComponents(string: "https://api.themoviedb.org/3/search/\(type)") else {
+            await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, reason: .invalidResponse)
             throw TMDBError.badResponse
         }
         var queryItems = [
@@ -171,10 +196,66 @@ struct TMDBService {
         guard let url = components.url else { throw TMDBError.badResponse }
         var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 15)
         requestHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw TMDBError.badResponse }
-        guard (200...299).contains(http.statusCode) else { throw TMDBError.rejected(http.statusCode) }
-        return (try? JSONDecoder().decode(TMDBSearchResponse.self, from: data).results) ?? []
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, reason: .invalidResponse)
+                throw TMDBError.badResponse
+            }
+            guard (200...299).contains(http.statusCode) else {
+                await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, status: http.statusCode, reason: .unavailable)
+                throw TMDBError.rejected(http.statusCode)
+            }
+            guard let rows = try? JSONDecoder().decode(TMDBSearchResponse.self, from: data).results else {
+                await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, status: http.statusCode, reason: .invalidResponse)
+                throw TMDBError.badResponse
+            }
+            await recordRequestCompleted(correlationID: correlationID, startedAt: startedAt, status: http.statusCode, candidateCount: rows.count)
+            return rows
+        } catch {
+            if error is TMDBError { throw error }
+            await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, reason: diagnosticReason(for: error))
+            throw error
+        }
+    }
+
+    private func recordRequestCompleted(correlationID: DiagnosticCorrelationID?, startedAt: Date, status: Int, candidateCount: Int) async {
+        await diagnostics?.record(category: .scraping, level: .debug, event: .requestCompleted, correlationID: correlationID, metadata: [
+            .host(.tmdbAPI), .stage(.search), .httpStatus(status), .latencyMilliseconds(elapsedMilliseconds(since: startedAt)),
+            .candidateCount(candidateCount), .outcome(.succeeded), .status(.completed)
+        ])
+    }
+
+    private func recordRequestFailure(correlationID: DiagnosticCorrelationID?, startedAt: Date, status: Int? = nil, reason: DiagnosticReason) async {
+        var metadata: [DiagnosticMetadata] = [
+            .host(.tmdbAPI), .stage(.search), .latencyMilliseconds(elapsedMilliseconds(since: startedAt)),
+            .outcome(.failed), .reason(reason), .status(.failed)
+        ]
+        if let status { metadata.append(.httpStatus(status)) }
+        await diagnostics?.record(category: .scraping, level: .warning, event: .requestFailed, correlationID: correlationID, metadata: metadata)
+    }
+
+    private func recordSearchSummary(correlationID: DiagnosticCorrelationID?, startedAt: Date, outcome: DiagnosticOutcome, candidateCount: Int) async {
+        await diagnostics?.record(category: .scraping, level: outcome == .failed ? .warning : .info, event: outcome == .failed ? .scrapingSearchFailed : .scrapingSearchCompleted, correlationID: correlationID, metadata: [
+            .host(.tmdbAPI), .stage(.disposition), .latencyMilliseconds(elapsedMilliseconds(since: startedAt)),
+            .candidateCount(candidateCount), .outcome(outcome), .status(outcome == .failed ? .failed : .completed)
+        ])
+    }
+
+    private func elapsedMilliseconds(since start: Date) -> Int {
+        max(0, Int((Date().timeIntervalSince(start) * 1_000).rounded()))
+    }
+
+    private func diagnosticReason(for error: Error) -> DiagnosticReason {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut: return .timedOut
+            case .cancelled: return .cancelled
+            case .notConnectedToInternet, .networkConnectionLost: return .networkUnavailable
+            default: return .unavailable
+            }
+        }
+        return .unknown
     }
 
     // MARK: - Title Normalisation Helpers

@@ -20,7 +20,9 @@ final class SessionViewModel: ObservableObject {
     init() {
         isMock = ProcessInfo.processInfo.arguments.contains("--mock")
         do {
-            if isMock { client = MockQuarkClient() } else { client = try LiveQuarkClient() }
+            if isMock { client = MockQuarkClient() } else {
+                client = try LiveQuarkClient(diagnostics: diagnostics)
+            }
         } catch {
             message = userFacingError(error)
             diagnostics.recordError(error, context: "初始化真实客户端")
@@ -36,19 +38,30 @@ final class SessionViewModel: ObservableObject {
         do {
             Self.logger.info("🔄 SessionViewModel: 正在尝试恢复会话...")
             account = try await client.restoreSession()
-            if let account {
-                Self.logger.info("🎉 SessionViewModel: 会话恢复成功！账号: \(account.displayName, privacy: .public)")
+            if account != nil {
+                Self.logger.info("🎉 SessionViewModel: session restored")
                 diagnostics.record("客户端已恢复保存的会话，并完成接口检查")
             } else {
                 Self.logger.info("ℹ️ SessionViewModel: 未发现已保存的登录会话")
             }
         } catch {
-            Self.logger.error("⚠️ SessionViewModel: 恢复会话遇到错误: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("⚠️ SessionViewModel: restore failed (error code \(Self.safeErrorCode(error), privacy: .public))")
             if account == nil {
                 message = userFacingError(error)
             }
             diagnostics.recordError(error, context: "会话恢复")
         }
+    }
+
+    private static func safeErrorCode(_ error: Error) -> Int {
+        if let quark = error as? QuarkError {
+            switch quark {
+            case .httpStatus(let code), .server(let code, _): return code
+            case .credentialStorage(let code): return Int(code)
+            default: return 0
+            }
+        }
+        return (error as NSError).code
     }
 
     func retryRestore() async {

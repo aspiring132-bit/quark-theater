@@ -1,5 +1,9 @@
 import Foundation
 
+enum ParsedMediaUnresolvedReason: String, Equatable, Codable {
+    case missingSeriesContext
+}
+
 struct ParsedMediaName: Equatable {
     let title: String
     let year: Int?
@@ -8,6 +12,17 @@ struct ParsedMediaName: Equatable {
     let episodeNumber: Int?
     /// If the title came from a parent folder rather than the filename itself, this is set.
     let inferredFromParent: Bool
+    let unresolvedReason: ParsedMediaUnresolvedReason?
+
+    init(title: String, year: Int?, mediaType: MediaType, seasonNumber: Int?, episodeNumber: Int?, inferredFromParent: Bool, unresolvedReason: ParsedMediaUnresolvedReason? = nil) {
+        self.title = title
+        self.year = year
+        self.mediaType = mediaType
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+        self.inferredFromParent = inferredFromParent
+        self.unresolvedReason = unresolvedReason
+    }
 }
 
 enum FilenameParser {
@@ -22,6 +37,11 @@ enum FilenameParser {
     private static let hyphenEpisodePattern = #"(?i)^(?:[Ss]?\d{1,2}[-_])(\d{1,3})$"#
     private static let yearPattern = #"(?:\(|\b)((?:19|20)\d{2})(?:\)|\b)"#
     private static let releaseTail = #"(?i)[ ._-]+(?:2160p|1080p|720p|480p|4k|8k|bluray|blu.?ray|web.?dl|webrip|hdtv|proper|remux|x26[45]|h\.?26[45]|hevc|avc|aac|dts).*$"#
+    private static let strictSeasonPattern = #"(?i)^(?:s(?:eason)?\s*0?([0-9]{1,2})|第\s*0?([0-9]{1,2})\s*季)$"#
+    private static let genericFolders: Set<String> = [
+        "extras", "specials", "featurettes", "trailers", "extra", "special",
+        "影视", "电影", "电视剧", "tv", "movies", "shows", "series", "0"
+    ]
 
     // MARK: - Public API
 
@@ -69,7 +89,9 @@ enum FilenameParser {
         let trimmed = base.trimmingCharacters(in: .whitespaces)
         if let match = firstMatch(bareNumberPattern, in: trimmed),
            let episode = Int(capture(match, 1, trimmed)) {
-            let effectiveTitle = detectedShowTitle ?? folderTitle(parentFolderName) ?? base
+            guard let effectiveTitle = detectedShowTitle ?? usableFolderTitle(parentFolderName) else {
+                return unresolvedBareEpisode(episode: episode, season: detectedSeasonNumber)
+            }
             return ParsedMediaName(
                 title: effectiveTitle,
                 year: nil, mediaType: .series,
@@ -81,7 +103,9 @@ enum FilenameParser {
         // 4. Hyphenated episode (e.g. "0-1", "0-2", "04-01")
         if let match = firstMatch(hyphenEpisodePattern, in: trimmed),
            let episode = Int(capture(match, 1, trimmed)) {
-            let effectiveTitle = detectedShowTitle ?? folderTitle(parentFolderName) ?? base
+            guard let effectiveTitle = detectedShowTitle ?? usableFolderTitle(parentFolderName) else {
+                return unresolvedBareEpisode(episode: episode, season: detectedSeasonNumber)
+            }
             return ParsedMediaName(
                 title: effectiveTitle,
                 year: nil, mediaType: .series,
@@ -106,11 +130,18 @@ enum FilenameParser {
         )
     }
 
+    /// Parse a file with all known path context and an optional named bound root.
+    static func parse(_ filename: String, pathComponents: [String], boundRootName: String?) -> ParsedMediaName {
+        let context = extractShowAndSeason(fromPath: pathComponents, boundRootName: boundRootName)
+        let parent = pathComponents.last
+        return parse(filename, parentFolderName: parent, detectedShowTitle: context.show, detectedSeasonNumber: context.season)
+    }
+
     // MARK: - Hierarchy Analysis
 
     /// Analyzes the full directory path array (e.g. ["来自：分享", "G 高堡奇人S01~S04", "Season 04", "S04"])
     /// and extracts (Show Title, Season Number).
-    static func extractShowAndSeason(fromPath pathComponents: [String]) -> (show: String?, season: Int?) {
+    static func extractShowAndSeason(fromPath pathComponents: [String], boundRootName: String? = nil) -> (show: String?, season: Int?) {
         var season: Int? = nil
         var show: String? = nil
 
@@ -120,26 +151,40 @@ enum FilenameParser {
                 continue
             }
 
-            // Check if this component specifies a season (e.g. "Season 04", "S04", "第2季", "大西洋帝国S01")
+            // Only an entire component can be a season marker. A title containing S01 is not one.
             if season == nil {
-                if let m = firstMatch(#"(?i)(?:season|s)\s*(\d{1,2})(?:[^\d]|$)"#, in: comp),
-                   let num = Int(capture(m, 1, comp)) {
-                    season = num
-                } else if let m = firstMatch(#"第\s*(\d{1,2})\s*季"#, in: comp),
-                          let num = Int(capture(m, 1, comp)) {
-                    season = num
+                if let m = firstMatch(strictSeasonPattern, in: comp) {
+                    let value = capture(m, 1, comp).isEmpty ? capture(m, 2, comp) : capture(m, 1, comp)
+                    if let num = Int(value) {
+                        season = num
+                    }
                 }
             }
 
-            // Extract show title
-            if show == nil {
-                if let ft = folderTitle(comp), ft.count > 1 {
-                    show = ft
-                }
+            if show == nil, let ft = usableFolderTitle(comp) {
+                show = ft
             }
         }
 
+        // A bound root is only a fallback.  A nearer named folder (for example
+        // root/category/show/S01) carries more specific context and must win.
+        if show == nil, let boundRootName, let rootTitle = usableFolderTitle(boundRootName) {
+            show = rootTitle
+        }
         return (show, season)
+    }
+
+    private static func unresolvedBareEpisode(episode: Int, season: Int?) -> ParsedMediaName {
+        ParsedMediaName(
+            title: "", year: nil, mediaType: .unknown,
+            seasonNumber: season, episodeNumber: episode,
+            inferredFromParent: true, unresolvedReason: .missingSeriesContext
+        )
+    }
+
+    private static func usableFolderTitle(_ folderName: String?) -> String? {
+        guard let title = folderTitle(folderName), !genericFolders.contains(title.lowercased()) else { return nil }
+        return title
     }
 
     /// Extract a human-readable show title from a folder name, stripping season markers,
@@ -155,7 +200,8 @@ enum FilenameParser {
         // Also strip single letter + whitespace if followed by ASCII
         s = s.replacingOccurrences(of: #"^[A-Za-z]\s+"#, with: "", options: .regularExpression)
         // Strip season indicators like "S01~S04", "S01-S04", "S01", "第1季", "Season 1", "全5季", "全6部"
-        s = s.replacingOccurrences(of: #"(?i)\s*[Ss]\d{1,2}(?:\s*[~-]\s*[Ss]?\d{1,2})?.*$"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"(?i)^[Ss]\d{1,2}(?:\s*[~-]\s*[Ss]?\d{1,2})?$"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"(?i)[\s._-]+[Ss]\d{1,2}(?:\s*[~-]\s*[Ss]?\d{1,2})?.*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\s*第\s*\d+\s*季.*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\s*全\s*\d+\s*[季部集].*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"(?i)\s*Season\s*\d+.*$"#, with: "", options: .regularExpression)

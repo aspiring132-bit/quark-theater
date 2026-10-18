@@ -4,6 +4,31 @@ import Foundation
 
 @MainActor
 final class PlaybackCoordinator: ObservableObject {
+    static func shouldCommitSeek(operationToken: UUID, currentToken: UUID, playerMatches: Bool, isCancelled: Bool = false) -> Bool {
+        !isCancelled && operationToken == currentToken && playerMatches
+    }
+
+    static func shouldClearSeekState(operationToken: UUID, currentToken: UUID, playerMatches: Bool, isCancelled: Bool) -> Bool {
+        !isCancelled && operationToken == currentToken && playerMatches
+    }
+
+    static func shouldScheduleRetry(currentGeneration: Int, scheduledGeneration: Int?, retryTaskActive: Bool) -> Bool {
+        !(retryTaskActive && scheduledGeneration == currentGeneration)
+    }
+
+    /// Returns true only when an observer callback still belongs to the active
+    /// player and its active item. Queued AVFoundation callbacks can arrive
+    /// after an item has been replaced, so checking the player alone is not
+    /// sufficient for item-scoped state such as buffering and throughput.
+    static func observerBelongsToCurrentPlayback(
+        observedPlayer: AVPlayer,
+        observedItem: AVPlayerItem,
+        currentPlayer: AVPlayer?,
+        currentItem: AVPlayerItem?
+    ) -> Bool {
+        observedPlayer === currentPlayer && observedItem === currentItem
+    }
+
     @Published private(set) var player: AVPlayer?
     @Published private(set) var message: String?
     @Published private(set) var isLoading = false
@@ -11,6 +36,7 @@ final class PlaybackCoordinator: ObservableObject {
     @Published private(set) var networkSpeedText: String = ""
     @Published private(set) var audioOptions: [AVMediaSelectionOption] = []
     @Published private(set) var subtitleOptions: [AVMediaSelectionOption] = []
+    @Published private(set) var lastSilentMarkerDate: Date?
     private let client: QuarkClient
     private let accountID: String
     private var currentFile: CloudFile
@@ -28,9 +54,14 @@ final class PlaybackCoordinator: ObservableObject {
     private var audioGroup: AVMediaSelectionGroup?
     private var subtitleGroup: AVMediaSelectionGroup?
     private var retryTask: Task<Void, Never>?
+    private var retryScheduledGeneration: Int?
     private var retriesUsed = 0
     private var restoredPosition: Double = 0
     private var generation = 0
+    private var pendingSeekTarget: Double?
+    private var inFlightSeekTarget: Double?
+    private var seekTask: Task<Void, Never>?
+    private var seekOperationToken = UUID()
 
     init(client: QuarkClient, accountID: String, file: CloudFile, queue: [CloudFile] = [],
          automaticallyPlayNext: Bool = false, history: HistoryRepository, diagnostics: Diagnostics) {
@@ -64,13 +95,61 @@ final class PlaybackCoordinator: ObservableObject {
             positionSeconds: completed ? duration : position, durationSeconds: duration,
             lastWatchedAt: Date(), completed: completed)
         do { try history.save(record) }
-        catch { diagnostics.record("观看进度保存失败：\(error.localizedDescription)") }
+        catch { diagnostics.recordError(error, context: "播放进度保存") }
     }
 
     func retry() {
         retryTask?.cancel()
+        retryScheduledGeneration = nil
         retriesUsed = 0
         retryTask = Task { await startRetryLoop() }
+    }
+
+    /// Handles one discrete Siri Remote skip. Invalid/unready player state is ignored.
+    func seek(direction: PlayerSeekDirection, interval: Int) {
+        guard let player, let item = player.currentItem, item.status == .readyToPlay else { return }
+        let current = player.currentTime().seconds
+        let duration = item.duration.seconds
+        guard let target = PlayerSeekMath.nextTarget(current: current, pending: pendingSeekTarget,
+                                                     inFlight: inFlightSeekTarget,
+                                                     direction: direction, interval: interval, duration: duration) else { return }
+        pendingSeekTarget = target
+        guard seekTask == nil else { return }
+        let operationToken = UUID()
+        seekOperationToken = operationToken
+        seekTask = Task { @MainActor [weak self, weak player] in
+            guard let self else { return }
+            guard let player else {
+                guard self.seekOperationToken == operationToken else { return }
+                self.pendingSeekTarget = nil
+                self.inFlightSeekTarget = nil
+                self.seekTask = nil
+                return
+            }
+            while let target = self.pendingSeekTarget {
+                guard self.seekOperationToken == operationToken, self.player === player else { return }
+                self.pendingSeekTarget = nil
+                self.inFlightSeekTarget = target
+                await player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+                guard Self.shouldCommitSeek(operationToken: operationToken, currentToken: self.seekOperationToken,
+                                             playerMatches: self.player === player, isCancelled: Task.isCancelled) else {
+                    guard Self.shouldClearSeekState(operationToken: operationToken,
+                                                    currentToken: self.seekOperationToken,
+                                                    playerMatches: self.player === player,
+                                                    isCancelled: Task.isCancelled) else { return }
+                    self.pendingSeekTarget = nil
+                    self.inFlightSeekTarget = nil
+                    self.seekTask = nil
+                    return
+                }
+                self.inFlightSeekTarget = nil
+                self.diagnostics.record(category: .playback, level: .debug, event: .playbackSeek,
+                                        metadata: [.playbackTimeSeconds(target)])
+            }
+            guard self.seekOperationToken == operationToken else { return }
+            self.inFlightSeekTarget = nil
+            self.seekTask = nil
+        }
     }
 
     @Published private(set) var selectedAudioIndex: Int?
@@ -83,6 +162,7 @@ final class PlaybackCoordinator: ObservableObject {
         guard audioOptions.indices.contains(index), let audioGroup else { return }
         selectedAudioIndex = index
         player?.currentItem?.select(audioOptions[index], in: audioGroup)
+        recordAudioSnapshot(level: .notice)
     }
 
     func selectSubtitle(_ index: Int?) {
@@ -102,6 +182,11 @@ final class PlaybackCoordinator: ObservableObject {
 
     func playFile(_ targetFile: CloudFile) {
         guard targetFile.fileId != currentFile.fileId else { return }
+        seekTask?.cancel()
+        seekOperationToken = UUID()
+        seekTask = nil
+        pendingSeekTarget = nil
+        inFlightSeekTarget = nil
         saveProgress()
         retryTask?.cancel()
         detachObservers()
@@ -129,15 +214,32 @@ final class PlaybackCoordinator: ObservableObject {
     func stop() {
         generation &+= 1
         retryTask?.cancel()
+        seekTask?.cancel()
+        seekOperationToken = UUID()
+        seekTask = nil
+        pendingSeekTarget = nil
+        inFlightSeekTarget = nil
         saveProgress()
-        if let periodicObserver, let player { player.removeTimeObserver(periodicObserver) }
-        periodicObserver = nil
-        itemObservers.forEach(NotificationCenter.default.removeObserver)
-        itemObservers.removeAll()
-        itemStatusObserver?.invalidate()
-        itemStatusObserver = nil
+        detachObservers()
         player?.pause()
         player = nil
+    }
+
+    /// Records a user-provided report that sound may be missing. This is not acoustic detection.
+    func markSilent() {
+        lastSilentMarkerDate = Date()
+        var metadata: [DiagnosticMetadata] = [
+            .playbackTimeSeconds(safePlaybackTime),
+            .playerState(currentDiagnosticPlayerState),
+            .bufferEmpty(player?.currentItem?.isPlaybackBufferEmpty ?? false),
+            .likelyToKeepUp(player?.currentItem?.isPlaybackLikelyToKeepUp ?? false),
+            .trackCount(audioOptions.count),
+            .route(currentAudioRoute)
+        ]
+        if let selectedAudioIndex { metadata.append(.audioTrackIndex(selectedAudioIndex)) }
+        if let waitingReason = currentWaitingReason { metadata.append(.waitingReason(waitingReason)) }
+        diagnostics.record(category: .audio, level: .notice, event: .silentMarker, metadata: metadata)
+        recordAccessAndErrorSummaries()
     }
 
     private func resolveAndPlay(at position: Double) async throws {
@@ -185,6 +287,7 @@ final class PlaybackCoordinator: ObservableObject {
         // 4. Strictly synchronize audio and video; wait for buffer instead of dropping video frames
         next.automaticallyWaitsToMinimizeStalling = true
 
+        invalidateSeekState()
         detachObservers()
         attachProgressObserver(to: next)
         player?.pause()
@@ -196,7 +299,9 @@ final class PlaybackCoordinator: ObservableObject {
             Task { await next.seek(to: CMTime(seconds: position, preferredTimescale: 600)) }
         }
         next.play()
-        diagnostics.record("开始播放请求：\(requestedFile.name)")
+        diagnostics.record(category: .playback, level: .info, event: .playbackState, metadata: [
+            .playerState(.loading), .status(.started)
+        ])
     }
 
     private func loadMediaOptions(asset: AVURLAsset, for item: AVPlayerItem, generation: Int) async {
@@ -213,9 +318,12 @@ final class PlaybackCoordinator: ObservableObject {
             if let subtitles, let currentSub = item.currentMediaSelection.selectedMediaOption(in: subtitles) {
                 selectedSubtitleIndex = subtitles.options.firstIndex(of: currentSub)
             }
+            recordAudioSnapshot(level: .info)
         } catch {
             if !(error is CancellationError) {
-                diagnostics.record("音轨/字幕信息暂不可用（系统错误码 \((error as NSError).code)）")
+                diagnostics.record(category: .audio, level: .warning, event: .audioError, metadata: [
+                    .status(.unavailable), .errorCode((error as NSError).code)
+                ])
             }
         }
     }
@@ -226,6 +334,7 @@ final class PlaybackCoordinator: ObservableObject {
                 guard item.status == .failed, let error = item.error else { return }
                 Task { @MainActor in
                     guard self?.player?.currentItem === item else { return }
+                    self?.recordPlaybackState(level: .error, error: error)
                     self?.handlePlaybackFailure(error)
                 }
             }
@@ -233,6 +342,7 @@ final class PlaybackCoordinator: ObservableObject {
                 Task { @MainActor in
                     guard self?.player?.currentItem === item else { return }
                     self?.isBuffering = item.isPlaybackBufferEmpty
+                    self?.recordPlaybackState(level: item.isPlaybackBufferEmpty ? .notice : .debug)
                 }
             }
         }
@@ -240,6 +350,7 @@ final class PlaybackCoordinator: ObservableObject {
             Task { @MainActor in
                 guard self?.player === player else { return }
                 self?.isBuffering = (player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+                self?.recordPlaybackState(level: .debug)
             }
         }
         periodicObserver = player.addPeriodicTimeObserver(
@@ -249,12 +360,20 @@ final class PlaybackCoordinator: ObservableObject {
             self?.saveProgress()
         } }
         // 1-second timer to sample real network throughput
-        speedObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main
-        ) { [weak self] _ in Task { @MainActor in
-            guard let self, let player = self.player, let item = player.currentItem else { return }
-            self.sampleThroughput(from: item)
-        } }
+        if let observedItem = player.currentItem {
+            speedObserver = player.addPeriodicTimeObserver(
+                forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main
+            ) { [weak self] _ in Task { @MainActor in
+                guard let self,
+                      Self.observerBelongsToCurrentPlayback(
+                        observedPlayer: player,
+                        observedItem: observedItem,
+                        currentPlayer: self.player,
+                        currentItem: self.player?.currentItem
+                      ) else { return }
+                self.sampleThroughput(from: observedItem)
+            } }
+        }
         itemObservers.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime,
             object: player.currentItem, queue: .main) { [weak self] note in
                 let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
@@ -272,12 +391,140 @@ final class PlaybackCoordinator: ObservableObject {
                 }
             })
         itemObservers.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemPlaybackStalled,
-            object: player.currentItem, queue: .main) { [weak self] _ in
+            object: player.currentItem, queue: .main) { [weak self] note in
+                guard let item = note.object as? AVPlayerItem else { return }
                 Task { @MainActor in
-                    self?.isBuffering = true
-                    self?.diagnostics.record("网络缓冲不足，AVPlayer 积极等待缓冲以防音画不同步…")
+                    guard let self,
+                          Self.observerBelongsToCurrentPlayback(
+                            observedPlayer: player,
+                            observedItem: item,
+                            currentPlayer: self.player,
+                            currentItem: self.player?.currentItem
+                          ) else { return }
+                    self.isBuffering = true
+                    self.recordPlaybackState(level: .notice)
+                    self.recordAccessAndErrorSummaries()
                 }
             })
+        itemObservers.append(NotificationCenter.default.addObserver(forName: Notification.Name(rawValue: "AVPlayerItemMediaSelectionDidChangeNotification"),
+            object: player.currentItem, queue: .main) { [weak self] note in
+                guard let item = note.object as? AVPlayerItem else { return }
+                Task { @MainActor in
+                    guard let self,
+                          Self.observerBelongsToCurrentPlayback(
+                            observedPlayer: player,
+                            observedItem: item,
+                            currentPlayer: self.player,
+                            currentItem: self.player?.currentItem
+                          ) else { return }
+                    self.recordAudioSnapshot(level: .debug)
+                }
+            })
+        itemObservers.append(NotificationCenter.default.addObserver(forName: Notification.Name(rawValue: "AVPlayerItemNewAccessLogEntryNotification"),
+            object: player.currentItem, queue: .main) { [weak self] note in
+                guard let item = note.object as? AVPlayerItem else { return }
+                Task { @MainActor in
+                    guard let self,
+                          Self.observerBelongsToCurrentPlayback(
+                            observedPlayer: player,
+                            observedItem: item,
+                            currentPlayer: self.player,
+                            currentItem: self.player?.currentItem
+                          ) else { return }
+                    self.recordAccessAndErrorSummaries()
+                }
+            })
+        itemObservers.append(NotificationCenter.default.addObserver(forName: Notification.Name(rawValue: "AVPlayerItemNewErrorLogEntryNotification"),
+            object: player.currentItem, queue: .main) { [weak self] note in
+                guard let item = note.object as? AVPlayerItem else { return }
+                Task { @MainActor in
+                    guard let self,
+                          Self.observerBelongsToCurrentPlayback(
+                            observedPlayer: player,
+                            observedItem: item,
+                            currentPlayer: self.player,
+                            currentItem: self.player?.currentItem
+                          ) else { return }
+                    self.recordAccessAndErrorSummaries()
+                }
+            })
+    }
+
+    private var safePlaybackTime: Double {
+        guard let seconds = player?.currentTime().seconds, seconds.isFinite else { return 0 }
+        return max(0, seconds)
+    }
+
+    private var currentDiagnosticPlayerState: DiagnosticPlayerState {
+        guard let player else { return .idle }
+        if player.currentItem?.status == .failed { return .failed }
+        switch player.timeControlStatus {
+        case .playing: return .playing
+        case .waitingToPlayAtSpecifiedRate: return .waiting
+        case .paused: return player.currentItem == nil ? .idle : .paused
+        @unknown default: return .idle
+        }
+    }
+
+    private var currentWaitingReason: DiagnosticWaitingReason? {
+        guard let reason = player?.reasonForWaitingToPlay else { return nil }
+        switch reason {
+        case .evaluatingBufferingRate: return .evaluatingBufferingRate
+        case .toMinimizeStalls: return .toMinimizeStalls
+        case .noItemToPlay: return .noItemToPlay
+        default: return .unknown
+        }
+    }
+
+    private var currentAudioRoute: DiagnosticAudioRoute {
+        guard let output = AVAudioSession.sharedInstance().currentRoute.outputs.first else { return .unknown }
+        // tvOS exposes HDMI as a runtime port value but not as a compile-time
+        // AVAudioSession.Port member in the tvOS 27 SDK.
+        if output.portType.rawValue.caseInsensitiveCompare("HDMI") == .orderedSame {
+            return .hdmi
+        }
+        switch output.portType {
+        case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE: return .bluetooth
+        case .airPlay: return .airPlay
+        case .builtInSpeaker, .builtInReceiver: return .builtIn
+        default: return .unknown
+        }
+    }
+
+    private func recordPlaybackState(level: DiagnosticLevel, error: Error? = nil) {
+        var metadata: [DiagnosticMetadata] = [
+            .playbackTimeSeconds(safePlaybackTime),
+            .playerState(currentDiagnosticPlayerState),
+            .bufferEmpty(player?.currentItem?.isPlaybackBufferEmpty ?? false),
+            .likelyToKeepUp(player?.currentItem?.isPlaybackLikelyToKeepUp ?? false),
+            .route(currentAudioRoute)
+        ]
+        if let waitingReason = currentWaitingReason { metadata.append(.waitingReason(waitingReason)) }
+        if let error { metadata.append(.errorCode((error as NSError).code)) }
+        diagnostics.record(category: .playback, level: level, event: error == nil ? .playbackState : .playbackError, metadata: metadata)
+    }
+
+    private func recordAudioSnapshot(level: DiagnosticLevel) {
+        var metadata: [DiagnosticMetadata] = [
+            .trackCount(audioOptions.count), .route(currentAudioRoute),
+            .playbackTimeSeconds(safePlaybackTime)
+        ]
+        if let selectedAudioIndex { metadata.append(.audioTrackIndex(selectedAudioIndex)) }
+        diagnostics.record(category: .audio, level: level, event: .audioSnapshot, metadata: metadata)
+    }
+
+    private func recordAccessAndErrorSummaries() {
+        guard let item = player?.currentItem else { return }
+        if let event = item.accessLog()?.events.last {
+            diagnostics.record(category: .playback, level: .debug, event: .playbackState, metadata: [
+                .durationMilliseconds(max(0, event.durationWatched * 1_000)), .status(.completed)
+            ])
+        }
+        if let event = item.errorLog()?.events.last {
+            diagnostics.record(category: .playback, level: .warning, event: .playbackError, metadata: [
+                .status(.failed), .errorCode(event.errorStatusCode)
+            ])
+        }
     }
 
     private func sampleThroughput(from item: AVPlayerItem) {
@@ -309,20 +556,45 @@ final class PlaybackCoordinator: ObservableObject {
         timeControlObserver = nil
     }
 
+    private func invalidateSeekState() {
+        seekTask?.cancel()
+        seekOperationToken = UUID()
+        seekTask = nil
+        pendingSeekTarget = nil
+        inFlightSeekTarget = nil
+    }
+
     private func handlePlaybackFailure(_ error: Error) {
         saveProgress()
+        guard Self.shouldScheduleRetry(currentGeneration: generation,
+                                       scheduledGeneration: retryScheduledGeneration,
+                                       retryTaskActive: retryTask != nil && !(retryTask?.isCancelled ?? true)) else { return }
         guard let delay = retryPolicy.delay(for: error, retriesUsed: retriesUsed) else {
             report(error)
             return
         }
         retriesUsed += 1
+        retryScheduledGeneration = generation
         message = "播放中断，正在重新获取地址并重试（\(retriesUsed)/2）…"
-        retryTask = Task {
+        let retryGeneration = generation
+        retryTask = Task { [weak self] in
+            defer {
+                Task { @MainActor in
+                    guard let self, self.generation == retryGeneration else { return }
+                    self.retryScheduledGeneration = nil
+                    self.retryTask = nil
+                }
+            }
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            do { try await resolveAndPlay(at: player?.currentTime().seconds ?? restoredPosition) }
-            catch is CancellationError { return }
-            catch { report(error) }
+            do {
+                guard let self else { return }
+                try await self.resolveAndPlay(at: self.player?.currentTime().seconds ?? self.restoredPosition)
+            } catch is CancellationError { return }
+            catch {
+                guard let self else { return }
+                self.report(error)
+            }
         }
     }
 
@@ -346,6 +618,8 @@ final class PlaybackCoordinator: ObservableObject {
         else if let urlError = error as? URLError { safeMessage = "网络播放错误（\(urlError.code.rawValue)）" }
         else { safeMessage = "播放失败（系统错误码 \((error as NSError).code)）" }
         message = safeMessage
-        diagnostics.record("播放失败：\(safeMessage)")
+        diagnostics.record(category: .playback, level: .error, event: .playbackError, metadata: [
+            .playerState(.failed), .status(.failed), .errorCode((error as NSError).code)
+        ])
     }
 }

@@ -7,6 +7,7 @@ final class LiveQuarkClient: QuarkClient {
     private static let logger = Logger(subsystem: "org.quarktheater.app", category: "QuarkClient")
     private let transport: any QuarkHTTPTransport
     private let credentialStore: any CredentialStore
+    private let diagnostics: Diagnostics?
     private let now: () -> Date
     private var cookies: [HTTPCookie] = []
     private var account: Account?
@@ -18,15 +19,16 @@ final class LiveQuarkClient: QuarkClient {
     // A local waiting limit, not an asserted server QR validity period.
     static let localQRCodeTimeout: TimeInterval = 300
 
-    convenience init() throws {
-        self.init(transport: URLSessionQuarkTransport(), credentialStore: KeychainCredentialStore())
+    convenience init(diagnostics: Diagnostics? = nil) throws {
+        self.init(transport: URLSessionQuarkTransport(), credentialStore: KeychainCredentialStore(), diagnostics: diagnostics)
     }
 
     init(transport: any QuarkHTTPTransport, credentialStore: any CredentialStore,
-         now: @escaping () -> Date = Date.init) {
+         now: @escaping () -> Date = Date.init, diagnostics: Diagnostics? = nil) {
         self.transport = transport
         self.credentialStore = credentialStore
         self.now = now
+        self.diagnostics = diagnostics
     }
 
     func restoreSession() async throws -> Account? {
@@ -40,7 +42,7 @@ final class LiveQuarkClient: QuarkClient {
            let list = try? JSONDecoder().decode([StoredCookie].self, from: raw) {
             candidateCookies = list.compactMap { $0.toHTTPCookie() }
             candidateAccount = Account(accountId: "quark-local-account", displayName: "夸克账号", authenticationState: .authenticated)
-            Self.logger.info("📱 [Simulator] 成功从本地 ~/.quark_theater_session.json 加载 \(candidateCookies.count) 个 Cookie")
+            Self.logger.info("📱 [Simulator] loaded local session cookies")
         }
         #endif
 
@@ -48,7 +50,7 @@ final class LiveQuarkClient: QuarkClient {
             if let stored = try? JSONDecoder().decode(StoredQuarkSession.self, from: data) {
                 candidateCookies = (try? stored.cookies()) ?? []
                 candidateAccount = stored.account
-                Self.logger.info("🔐 从 Keychain 加载到 \(candidateCookies.count) 个 Cookie")
+                Self.logger.info("🔐 loaded session from Keychain")
             }
         }
 
@@ -73,7 +75,7 @@ final class LiveQuarkClient: QuarkClient {
             return account
         } catch {
             if let qe = error as? QuarkError, qe == .authenticationRequired {
-                Self.logger.error("❌ 会话已明确失效(401): \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("❌ session rejected (authentication required)")
                 account = nil
                 cookies.removeAll()
                 try? credentialStore.delete()
@@ -81,7 +83,7 @@ final class LiveQuarkClient: QuarkClient {
             } else {
                 // Temporary network glitch / timeout / offline.
                 // Keep the account as authenticated so user is NOT kicked back to login screen!
-                Self.logger.warning("⚠️ 会话检查遭遇网络波动/超时，保留本地登录态: \(error.localizedDescription, privacy: .public)")
+                Self.logger.warning("⚠️ session check unavailable; retaining local session")
                 account = acc
                 return account
             }
@@ -127,8 +129,9 @@ final class LiveQuarkClient: QuarkClient {
               let ticket = members(result)?["service_ticket"] as? String, !ticket.isEmpty else {
             throw QuarkError.invalidResponse("扫码响应缺少 data.members.service_ticket")
         }
-        _ = try await request("https://pan.quark.cn/account/info", query: ["st": ticket, "lw": "scan"])
+        let accountResult = try await request("https://pan.quark.cn/account/info", query: ["st": ticket, "lw": "scan"])
         try ensureGeneration(generation)
+        try requireAccountSuccess(accountResult)
         guard !cookies.isEmpty else { throw QuarkError.authenticationRequired }
         // A ticket alone does not establish a working authenticated drive session.
         _ = try await fetchFiles(parentID: "0", page: 1, pageSize: 1)
@@ -241,8 +244,9 @@ final class LiveQuarkClient: QuarkClient {
             "resolutions": "original,4k,2k,super,high,low",
             "supports": "fmp4,hls,mp4"
         ]
+        let playbackCorrelation = diagnostics?.makeCorrelationID()
 
-        if let playResult = try? await request(Self.api + "/file/v2/play", query: playQuery, body: playBody),
+        if let playResult = try? await request(Self.api + "/file/v2/play", query: playQuery, body: playBody, correlationID: playbackCorrelation),
            let status = integer(playResult["status"]), status == 200,
            let data = playResult["data"] as? [String: Any],
            let videoList = data["video_list"] as? [[String: Any]], !videoList.isEmpty {
@@ -251,9 +255,7 @@ final class LiveQuarkClient: QuarkClient {
                    let value = videoInfo["url"] as? String,
                    let url = URL(string: value), url.scheme?.lowercased() == "https", url.host != nil,
                    url.user == nil, url.password == nil {
-                    let resName = item["resolution"] as? String ?? "默认"
-                    let fmtName = videoInfo["format"] as? String ?? "流媒体"
-                    Self.logger.info("🎬 成功获取专属视频流直链: 分辨率 \(resName, privacy: .public), 格式 \(fmtName, privacy: .public)")
+                    Self.logger.info("🎬 成功获取专属视频流直链")
                     return PlaybackResource(fileID: fileID, url: url, cookies: cookies,
                                             requiredHTTPHeaders: ["User-Agent": Self.desktopUserAgent,
                                                                   "Origin": "https://pan.quark.cn", "Referer": "https://pan.quark.cn/"],
@@ -262,10 +264,14 @@ final class LiveQuarkClient: QuarkClient {
             }
         }
 
+        diagnostics?.record(category: .cloud, level: .notice, event: .requestFallback,
+                            correlationID: playbackCorrelation,
+                            metadata: [.host(.quarkAPI), .endpoint(.fileDownload), .fallback(true), .reason(.unavailable)])
+
         // 2. Fallback to generic /file/download if v2/play is unavailable or file is not a playable video
         var query = driveQuery()
         query.merge(["sys": "win32", "ve": "2.5.56", "ut": "", "guid": ""]) { _, new in new }
-        let result = try await request(Self.api + "/file/download", query: query, body: ["fids": [fileID]])
+        let result = try await request(Self.api + "/file/download", query: query, body: ["fids": [fileID]], correlationID: playbackCorrelation)
         try requireDriveSuccess(result)
         guard let entries = result["data"] as? [[String: Any]],
               let entry = entries.first(where: { $0["fid"] as? String == fileID }),
@@ -323,9 +329,22 @@ final class LiveQuarkClient: QuarkClient {
         return url
     }
 
-    private func request(_ endpoint: String, query: [String: String], body: [String: Any]? = nil) async throws -> [String: Any] {
+    private func request(_ endpoint: String, query: [String: String], body: [String: Any]? = nil,
+                         correlationID: DiagnosticCorrelationID? = nil) async throws -> [String: Any] {
         let generation = sessionGeneration
         let url = try buildURL(endpoint, query: query)
+        let correlationID = correlationID ?? diagnostics?.makeCorrelationID()
+        let start = DispatchTime.now().uptimeNanoseconds
+        let endpointKind = Self.diagnosticEndpoint(for: url)
+        func latency() -> Int { Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000) }
+        func recordFailure(_ error: Error, status: Int? = nil) {
+            var metadata: [DiagnosticMetadata] = [.host(.quarkAPI), .endpoint(endpointKind),
+                                                   .latencyMilliseconds(latency()), .outcome(.failed),
+                                                   .reason(Self.diagnosticReason(for: error))]
+            if let status { metadata.append(.httpStatus(status)) }
+            diagnostics?.record(category: .cloud, level: .error, event: .requestFailed,
+                                correlationID: correlationID, metadata: metadata)
+        }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = body == nil ? "GET" : "POST"
         let isDownloadOrPlay = endpoint.contains("/download") || endpoint.contains("/play")
@@ -349,18 +368,29 @@ final class LiveQuarkClient: QuarkClient {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        Self.logger.info("📡 发送请求: \(endpoint, privacy: .public), Cookie 数量: \(self.cookies.count)")
-        let (data, response) = try await transport.send(request)
-        try ensureGeneration(generation)
-        Self.logger.info("📥 收到响应: HTTP \(response.statusCode) 来自 \(url.host ?? "", privacy: .public)")
+        Self.logger.info("📡 发送夸克请求端点: \(endpointKind.rawValue, privacy: .public), Cookie 数量: \(self.cookies.count)")
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await transport.send(request)
+            try ensureGeneration(generation)
+        } catch {
+            recordFailure(error)
+            throw error
+        }
+        Self.logger.info("📥 received response HTTP \(response.statusCode, privacy: .public)")
 
-        guard response.url?.host == url.host else { throw QuarkError.invalidResponse("接口重定向主机未验证") }
+        guard response.url?.host == url.host else {
+            let error = QuarkError.invalidResponse("接口重定向主机未验证")
+            recordFailure(error, status: response.statusCode)
+            throw error
+        }
         switch response.statusCode {
         case 200...299: break
-        case 401: throw QuarkError.authenticationRequired
-        case 403: throw QuarkError.forbidden
-        case 429: throw QuarkError.rateLimited
-        default: throw QuarkError.httpStatus(response.statusCode)
+        case 401: let error = QuarkError.authenticationRequired; recordFailure(error, status: response.statusCode); throw error
+        case 403: let error = QuarkError.forbidden; recordFailure(error, status: response.statusCode); throw error
+        case 429: let error = QuarkError.rateLimited; recordFailure(error, status: response.statusCode); throw error
+        default: let error = QuarkError.httpStatus(response.statusCode); recordFailure(error, status: response.statusCode); throw error
         }
 
         // Capture incoming Set-Cookie headers
@@ -383,9 +413,97 @@ final class LiveQuarkClient: QuarkClient {
         }
 
         guard let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw QuarkError.invalidResponse("响应不是 JSON 对象")
+            let error = QuarkError.invalidResponse("响应不是 JSON 对象")
+            recordFailure(error, status: response.statusCode)
+            throw error
+        }
+        let businessStatus = integer(result["status"])
+        let businessCode = integer(result["code"])
+        let isQRWaiting = endpointKind == .loginTicket && businessStatus == 50004001
+        let businessRejected = !isQRWaiting && !Self.isBusinessSuccess(endpoint: endpointKind,
+                                                                        status: businessStatus,
+                                                                        code: businessCode)
+        let businessReason: DiagnosticReason = {
+            switch businessStatus {
+            case 401: return .authenticationRequired
+            case 403: return .forbidden
+            case 429: return .rateLimited
+            default: return .unavailable
+            }
+        }()
+        var metadata: [DiagnosticMetadata] = [.host(.quarkAPI), .endpoint(endpointKind),
+                                               .httpStatus(response.statusCode), .latencyMilliseconds(latency()),
+                                               .outcome(businessRejected ? .failed : (isQRWaiting ? .partial : .succeeded)),
+                                               .reason(businessRejected ? businessReason : .none)]
+        if let businessCode { metadata.append(.businessCode(businessCode)) }
+        if businessRejected {
+            if let businessStatus { metadata.append(.errorCode(businessStatus)) }
+            diagnostics?.record(category: .cloud, level: .error, event: .requestFailed,
+                                correlationID: correlationID, metadata: metadata)
+        } else {
+            diagnostics?.record(category: .cloud, level: .info, event: .requestCompleted,
+                                correlationID: correlationID, metadata: metadata)
         }
         return result
+    }
+
+    private static func diagnosticEndpoint(for url: URL) -> DiagnosticQuarkEndpoint {
+        switch url.path {
+        case "/cas/ajax/getTokenForQrcodeLogin": return .loginToken
+        case "/cas/ajax/getServiceTicketByQrcodeToken": return .loginTicket
+        case "/account/info": return .accountInfo
+        case "/1/clouddrive/file/sort": return .fileSort
+        case "/1/clouddrive/file/search": return .fileSearch
+        case "/1/clouddrive/file/v2/play": return .filePlay
+        case "/1/clouddrive/file/download": return .fileDownload
+        default: return .unknown
+        }
+    }
+
+    /// Business status values differ between the QR/account APIs and the drive APIs.
+    /// Keep this interpretation here so diagnostics match the same contract checks
+    /// performed by the operation before it returns a result to its caller.
+    private static func isBusinessSuccess(endpoint: DiagnosticQuarkEndpoint,
+                                           status: Int?, code: Int?) -> Bool {
+        switch endpoint {
+        case .loginToken:
+            return status == 2000000 && (code == nil || code == 0)
+        case .loginTicket:
+            return status == 2000000 && (code == nil || code == 0)
+        case .accountInfo:
+            // The account exchange endpoint has historically returned an empty
+            // object with only Set-Cookie. If it supplies business fields, accept
+            // either the QR API's success value or a conventional HTTP-style 200.
+            guard let status else { return code == nil || code == 0 }
+            return (status == 200 || status == 2000000) && (code == nil || code == 0)
+        case .fileSort, .fileSearch, .filePlay, .fileDownload:
+            return (status.map { $0 == 200 } ?? true) && (code.map { $0 == 0 } ?? true)
+        case .unknown:
+            return true
+        }
+    }
+
+    private static func diagnosticReason(for error: Error) -> DiagnosticReason {
+        if let error = error as? QuarkError {
+            switch error {
+            case .authenticationRequired: return .authenticationRequired
+            case .forbidden: return .forbidden
+            case .rateLimited: return .rateLimited
+            case .httpStatus(let code) where code == 408: return .timedOut
+            case .httpStatus: return .unavailable
+            case .invalidResponse: return .invalidResponse
+            default: return .unknown
+            }
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut: return .timedOut
+            case .cancelled: return .cancelled
+            case .notConnectedToInternet, .networkConnectionLost: return .networkUnavailable
+            default: return .unknown
+            }
+        }
+        return error is CancellationError ? .cancelled : .unknown
     }
 
     private func ensureGeneration(_ generation: Int) throws {
@@ -422,6 +540,15 @@ final class LiveQuarkClient: QuarkClient {
     private func requireQRSuccess(_ value: [String: Any]) throws {
         guard let status = integer(value["status"]) else { throw QuarkError.invalidResponse("缺少二维码 status") }
         guard status == 2000000 else { throw QuarkError.server(code: status, message: "二维码服务拒绝请求") }
+    }
+
+    private func requireAccountSuccess(_ value: [String: Any]) throws {
+        guard Self.isBusinessSuccess(endpoint: .accountInfo,
+                                     status: integer(value["status"]),
+                                     code: integer(value["code"])) else {
+            let status = integer(value["status"]) ?? integer(value["code"]) ?? -1
+            throw QuarkError.server(code: status, message: "账号交换服务拒绝请求")
+        }
     }
 
     private func requireDriveSuccess(_ value: [String: Any]) throws {

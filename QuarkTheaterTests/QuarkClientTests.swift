@@ -17,10 +17,10 @@ final class QuarkClientTests: XCTestCase {
     private func filesReply(total: Int = 1) -> StubReply {
         StubReply(json: ["status": 200, "code": 0, "data": ["list": [["fid": "f-1", "pdir_fid": "0", "file_name": "电影.2024.MP4", "size": 2048, "updated_at": 1_800_000_000_000, "dir": false]]], "metadata": ["_page": 1, "_count": 1, "_total": total]])
     }
-    private func authenticated() async throws -> (LiveQuarkClient, QueueTransport, MemoryCredentials, Account) {
+    private func authenticated(diagnostics: Diagnostics? = nil) async throws -> (LiveQuarkClient, QueueTransport, MemoryCredentials, Account) {
         let transport = QueueTransport([tokenReply, ticketReply, exchangeReply, filesReply()])
         let store = MemoryCredentials()
-        let client = LiveQuarkClient(transport: transport, credentialStore: store, now: { self.baseDate })
+        let client = LiveQuarkClient(transport: transport, credentialStore: store, now: { self.baseDate }, diagnostics: diagnostics)
         let challenge = try await client.beginQRCodeLogin()
         let state = try await client.pollQRCodeLogin(challenge)
         guard case .authenticated(let account) = state else { throw FixtureError.unexpectedState }
@@ -79,6 +79,44 @@ final class QuarkClientTests: XCTestCase {
             guard case .server(let code, _) = error else { return XCTFail("Wrong failure") }
             XCTAssertEqual(code, 50004002)
         }
+    }
+    func testQRBusinessRejectionEmitsFailedDiagnostic() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = DiagnosticsStore(directoryURL: directory)
+        let diagnostics = Diagnostics(store: store)
+        let transport = QueueTransport([StubReply(json: ["status": 50004002, "code": 9001])])
+        let client = LiveQuarkClient(transport: transport, credentialStore: MemoryCredentials(), diagnostics: diagnostics)
+
+        do { _ = try await client.beginQRCodeLogin(); XCTFail("Expected QR token rejection") }
+        catch let error as QuarkError {
+            guard case .server(let code, _) = error else { return XCTFail("Wrong failure") }
+            XCTAssertEqual(code, 50004002)
+        }
+        await diagnostics.waitForPendingOperations()
+        let records = await store.recent(limit: 10)
+        let loginRecords = records.filter { $0.category == .cloud && $0.metadata["endpoint"] == .string(DiagnosticQuarkEndpoint.loginToken.rawValue) }
+        XCTAssertTrue(loginRecords.contains { $0.event == .requestFailed && $0.metadata["businessCode"] == .int(9001) })
+        XCTAssertFalse(loginRecords.contains { $0.event == .requestCompleted })
+    }
+    func testAccountBusinessRejectionEmitsFailedDiagnostic() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = DiagnosticsStore(directoryURL: directory)
+        let diagnostics = Diagnostics(store: store)
+        let accountRejected = StubReply(json: ["status": 50004002, "code": 9002], headers: ["Set-Cookie": "__uid=TEST-UID; Domain=.quark.cn; Path=/; Secure; HttpOnly"])
+        let transport = QueueTransport([tokenReply, ticketReply, accountRejected])
+        let client = LiveQuarkClient(transport: transport, credentialStore: MemoryCredentials(), diagnostics: diagnostics)
+        let challenge = try await client.beginQRCodeLogin()
+
+        do { _ = try await client.pollQRCodeLogin(challenge); XCTFail("Expected account exchange rejection") }
+        catch let error as QuarkError {
+            guard case .server(let code, _) = error else { return XCTFail("Wrong failure") }
+            XCTAssertEqual(code, 9002)
+        }
+        await diagnostics.waitForPendingOperations()
+        let records = await store.recent(limit: 20)
+        let accountRecords = records.filter { $0.category == .cloud && $0.metadata["endpoint"] == .string(DiagnosticQuarkEndpoint.accountInfo.rawValue) }
+        XCTAssertTrue(accountRecords.contains { $0.event == .requestFailed && $0.metadata["businessCode"] == .int(9002) })
+        XCTAssertFalse(accountRecords.contains { $0.event == .requestCompleted })
     }
     func testLoginRequiresTicketExchangeAndAuthenticatedListing() async throws {
         let (_, transport, store, account) = try await authenticated()
@@ -172,6 +210,35 @@ final class QuarkClientTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         let body = try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: [String]]
         XCTAssertEqual(body?["fids"], ["f-1"])
+    }
+
+    func testPlaybackFallbackEmitsCorrelatedRedactedCloudEvents() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = DiagnosticsStore(directoryURL: directory)
+        let diagnostics = Diagnostics(store: store)
+        let (client, transport, _, _) = try await authenticated(diagnostics: diagnostics)
+
+        transport.replies.append(StubReply(json: ["status": 503, "code": 9001]))
+        transport.replies.append(StubReply(json: ["status": 200, "code": 0,
+            "data": [["fid": "f-1", "download_url": "https://media.example.invalid/a.mp4"]]]))
+
+        _ = try await client.playbackResource(fileID: "f-1")
+        await diagnostics.waitForPendingOperations()
+        let records = await store.recent(limit: 10)
+        let cloud = records.filter {
+            $0.category == .cloud &&
+            ($0.metadata["endpoint"] == .string(DiagnosticQuarkEndpoint.filePlay.rawValue) ||
+             $0.metadata["endpoint"] == .string(DiagnosticQuarkEndpoint.fileDownload.rawValue))
+        }
+        XCTAssertTrue(cloud.contains { $0.event == .requestFailed })
+        XCTAssertTrue(cloud.contains {
+            $0.event == .requestFailed && $0.metadata["businessCode"] == .int(9001)
+        })
+        XCTAssertTrue(cloud.contains { $0.event == .requestFallback })
+        XCTAssertTrue(cloud.contains { $0.event == .requestCompleted })
+        let correlations = Set(cloud.compactMap(\.correlationID))
+        XCTAssertEqual(correlations.count, 1)
+        XCTAssertFalse(cloud.contains { $0.metadata.keys.contains("url") || $0.metadata.keys.contains("fileID") })
     }
     func testCookieScopeRejectsLookalikesAndWrongPaths() throws {
         let cookie = try XCTUnwrap(HTTPCookie(properties: [.name: "session", .value: "TEST", .domain: ".quark.cn", .path: "/account", .secure: "TRUE"]))

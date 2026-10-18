@@ -1,25 +1,5 @@
 import SwiftUI
 
-private enum RootTab: String, Hashable, CaseIterable {
-    case media, sources, settings
-
-    var title: String {
-        switch self {
-        case .media: return "影院"
-        case .sources: return "网盘管理"
-        case .settings: return "设置"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .media: return "film.stack"
-        case .sources: return "externaldrive.connected.to.line.below"
-        case .settings: return "gearshape"
-        }
-    }
-}
-
 @MainActor
 struct RootView: View {
     @ObservedObject var model: SessionViewModel
@@ -27,7 +7,6 @@ struct RootView: View {
     let mediaCatalog: MediaCatalogRepository?
     @State private var selectedTab: RootTab = .media
     @State private var showFolderSelection = false
-    @State private var isDockHidden = false
     @FocusState private var focusedDockTab: RootTab?
 
     var body: some View {
@@ -63,21 +42,21 @@ struct RootView: View {
             }
         }
         .ignoresSafeArea()
-        .onExitCommand {
-            if selectedTab != .media {
-                selectedTab = .media
-            }
-        }
+        .modifier(RootBackHandler(isEnabled: RootFocusReducer.shouldConsumeBack(selectedTab)) {
+            selectedTab = RootFocusReducer.selectedTabAfterBack(selectedTab)
+        })
         .onChange(of: model.account) { _, newAccount in
             if newAccount == nil {
                 selectedTab = .media
             }
         }
         .onChange(of: selectedTab) { _, _ in
-            isDockHidden = false
+            focusedDockTab = RootFocusReducer.dockTarget(for: selectedTab)
+            model.diagnostics.recordFocusTransition(selectedTab.diagnosticFocusTarget)
         }
         .task {
             UserDefaults.standard.removeObject(forKey: "selectedTab")
+            focusedDockTab = RootFocusReducer.dockTarget(for: selectedTab)
         }
         .task(id: model.account?.accountId) {
             if let account = model.account {
@@ -105,9 +84,8 @@ struct RootView: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 36)
         .focusSection()
-        .offset(y: (isDockHidden && focusedDockTab == nil) ? -140 : 0)
-        .opacity((isDockHidden && focusedDockTab == nil) ? 0 : 1)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isDockHidden)
+        // Keep the dock in the focus tree and on-screen even while the library scrolls.
+        // Hiding it made the next focus target disappear on tvOS and stranded the remote.
     }
 
     // MARK: - Floating Dock Bar Pill
@@ -180,7 +158,6 @@ struct RootView: View {
                 tokenStore: TMDBCredentialStore(),
                 catalog: mediaCatalog,
                 diagnostics: model.diagnostics,
-                isDockHidden: $isDockHidden
             )
             .id(account.accountId)
             .ignoresSafeArea(edges: .top)
@@ -235,6 +212,30 @@ struct RootView: View {
                 Text("请前往影院使用夸克 App 扫码登录。").foregroundStyle(.secondary)
             }
             .padding(.top, 120)
+        }
+    }
+}
+
+private extension RootTab {
+    var diagnosticFocusTarget: DiagnosticFocusTarget {
+        switch self {
+        case .media: return .media
+        case .sources: return .sources
+        case .settings: return .settings
+        }
+    }
+}
+
+private struct RootBackHandler: ViewModifier {
+    let isEnabled: Bool
+    let action: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.onExitCommand(perform: action)
+        } else {
+            content
         }
     }
 }
@@ -428,8 +429,12 @@ private struct SettingsScreen: View {
     @State private var confirmLogout = false
     @State private var confirmClearHistory = false
     @State private var confirmClearMetadata = false
+    @State private var diagnosticCategory: DiagnosticCategory?
+    @State private var diagnosticsMessage: String?
+    @State private var learnedAliases: [LearnedAlias] = []
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
     @AppStorage("scraperLanguage") private var scraperLanguage = "zh-CN"
+    @AppStorage(PlayerSeekPreference.key) private var seekInterval = PlayerSeekPreference.defaultInterval
 
     var body: some View {
         ScrollView {
@@ -517,6 +522,31 @@ private struct SettingsScreen: View {
                 Text("播放偏好").font(.title2.bold())
                 Toggle("剧集自动连播下一集", isOn: $autoPlayNextEpisode)
                     .frame(maxWidth: 800)
+                Picker("跳过时长", selection: $seekInterval) {
+                    Text("10 秒").tag(10)
+                    Text("15 秒").tag(15)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 800)
+                .onChange(of: seekInterval) { _, value in
+                    if value != 10 && value != 15 { seekInterval = PlayerSeekPreference.defaultInterval }
+                }
+
+                Text("已学习别名").font(.title2.bold())
+                if learnedAliases.isEmpty {
+                    Text("暂无已确认别名。手动确认匹配后会显示在这里。")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(learnedAliases) { alias in
+                        HStack {
+                            Text("\(alias.sourceTitle) → \(alias.canonicalTitle)")
+                            Spacer()
+                            Text(alias.mediaType.rawValue).foregroundStyle(.secondary)
+                            Button("删除", role: .destructive) { removeAlias(alias) }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                }
 
                 Text("数据维护与缓存管理").font(.title2.bold())
                 HStack(spacing: 20) {
@@ -542,15 +572,50 @@ private struct SettingsScreen: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Button("清空日志") { model.diagnostics.clear() }
+                        Picker("分类", selection: $diagnosticCategory) {
+                            Text("全部").tag(DiagnosticCategory?.none)
+                            ForEach(DiagnosticCategory.allCases, id: \.self) { category in
+                                Text(category.rawValue).tag(Optional(category))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        Button("导出") { exportDiagnostics() }
+                            .buttonStyle(.bordered)
+                        Button("清空日志") {
+                            diagnosticsMessage = nil
+                            Task {
+                                switch await model.diagnostics.clear().value {
+                                case .success:
+                                    diagnosticsMessage = "日志已清空。"
+                                case .failure(let failure):
+                                    diagnosticsMessage = "清空日志失败（\(failure.operation.rawValue)，错误码 \(failure.code)）"
+                                }
+                            }
+                        }
                             .buttonStyle(.bordered)
                     }
-                    ForEach(model.diagnostics.entries.suffix(15).reversed()) { entry in
-                        HStack(alignment: .top, spacing: 16) {
-                            Text(entry.date, style: .time).monospacedDigit().font(.caption2).foregroundStyle(.secondary)
-                            Text(entry.message).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                    if visibleDiagnosticRecords.isEmpty {
+                        Text("暂无符合当前筛选条件的诊断记录。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(visibleDiagnosticRecords) { record in
+                            HStack(alignment: .top, spacing: 16) {
+                                Text(record.date, style: .time).monospacedDigit().font(.caption2).foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("[\(record.category.rawValue)] \(record.event.rawValue)").font(.caption.bold())
+                                    Text(diagnosticSummary(record)).font(.caption).foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
                     }
+                    if let failure = model.diagnostics.storageFailure {
+                        Text("日志存储失败（\(failure.operation.rawValue)，错误码 \(failure.code)）")
+                            .foregroundStyle(.orange)
+                    }
+                    if let diagnosticsMessage { Text(diagnosticsMessage).foregroundStyle(.cyan) }
                 }
                 .padding(20)
                 .background(Color.white.opacity(0.04))
@@ -587,6 +652,44 @@ private struct SettingsScreen: View {
                 FolderSelectionScreen(client: client, accountID: account.accountId, diagnostics: model.diagnostics, isPresented: $showFolderSelection) {}
             }
         }
-        .task { tmdbConfigured = (try? tmdbStore.load()) != nil }
+        .task {
+            tmdbConfigured = (try? tmdbStore.load()) != nil
+            if seekInterval != 10 && seekInterval != 15 { seekInterval = PlayerSeekPreference.defaultInterval }
+            reloadAliases()
+        }
+    }
+
+    private func diagnosticSummary(_ record: DiagnosticRecord) -> String {
+        record.metadata.keys.sorted().compactMap { key in
+            guard let value = record.metadata[key] else { return nil }
+            return "\(key)=\(String(describing: value))"
+        }.joined(separator: " · ")
+    }
+
+    private var visibleDiagnosticRecords: [DiagnosticRecord] {
+        DiagnosticRecordProjection.visible(model.diagnostics.records, category: diagnosticCategory)
+    }
+
+    private func exportDiagnostics() {
+        Task {
+            switch await model.diagnostics.export() {
+            case .success(let url): diagnosticsMessage = "已导出：\(url.lastPathComponent)（\(url.deletingLastPathComponent().path)）"
+            case .failure(let failure): diagnosticsMessage = "导出失败（错误码 \(failure.code)）"
+            }
+        }
+    }
+
+    private func reloadAliases() {
+        guard let accountID = model.account?.accountId, let mediaCatalog else { learnedAliases = []; return }
+        learnedAliases = (try? mediaCatalog.learnedAliases(accountID: accountID)) ?? []
+    }
+
+    private func removeAlias(_ alias: LearnedAlias) {
+        guard let mediaCatalog else { return }
+        do {
+            try mediaCatalog.removeLearnedAlias(accountID: alias.accountID, mediaType: alias.mediaType, sourceTitle: alias.sourceTitle)
+            reloadAliases()
+            settingsMessage = "已删除别名，媒体库条目未删除。"
+        } catch { settingsMessage = "删除别名失败：\(error.localizedDescription)" }
     }
 }

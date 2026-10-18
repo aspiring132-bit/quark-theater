@@ -61,4 +61,62 @@ final class MediaCatalogRepositoryTests: XCTestCase {
                        MediaScanDiff(added: 0, changed: 0, removed: 1))
         XCTAssertEqual(try repo.reconcileScan(accountID: "account-b", candidates: [candidate]).added, 1)
     }
+
+    func testLearnedAliasesAreScopedAndRemovableWithoutDeletingCatalog() throws {
+        let (repo, folder) = try repository()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let item = MediaItem(id: "f-1", fileId: "f-1", mediaType: .series, title: "权力的游戏", tmdbId: 1399, matchConfidence: 1)
+        try repo.confirm(item, accountID: "account-a")
+        try repo.learnAlias(accountID: "account-a", mediaType: .series, sourceTitle: "Quan You", canonicalTitle: "权力的游戏", tmdbID: 1399)
+        XCTAssertEqual(try repo.learnedAliasVariants(accountID: "account-a", mediaType: .series, sourceTitle: "quan.you"), ["权力的游戏"])
+        XCTAssertTrue(try repo.learnedAliasVariants(accountID: "account-b", mediaType: .series, sourceTitle: "Quan You").isEmpty)
+        XCTAssertTrue(try repo.learnedAliasVariants(accountID: "account-a", mediaType: .movie, sourceTitle: "Quan You").isEmpty)
+        try repo.removeLearnedAlias(accountID: "account-a", mediaType: .series, sourceTitle: "Quan You")
+        XCTAssertTrue(try repo.learnedAliasVariants(accountID: "account-a", mediaType: .series, sourceTitle: "Quan You").isEmpty)
+        XCTAssertEqual(try repo.confirmed(accountID: "account-a").first?.tmdbId, 1399)
+    }
+
+    func testLearnedAliasRecordRetainsConfirmedTMDBIdentity() throws {
+        let (repo, folder) = try repository()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try repo.learnAlias(accountID: "account-a", mediaType: .series, sourceTitle: "Quan You", canonicalTitle: "权力的游戏", tmdbID: 1399)
+        let records = try repo.learnedAliasRecords(accountID: "account-a", mediaType: .series, sourceTitle: "quan.you")
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.tmdbID, 1399)
+        XCTAssertEqual(records.first?.canonicalTitle, "权力的游戏")
+    }
+
+    func testAutoConfirmationDoesNotCreateAlias() throws {
+        let (repo, folder) = try repository()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let item = MediaItem(id: "f-2", fileId: "f-2", mediaType: .movie, title: "蜘蛛侠", tmdbId: 557, matchConfidence: 1)
+        try repo.confirm(item, accountID: "account-a")
+        XCTAssertTrue(try repo.learnedAliasVariants(accountID: "account-a", mediaType: .movie, sourceTitle: "蛛丝").isEmpty)
+    }
+
+    func testLearnedAliasListCanBeRemovedWithoutRemovingCatalogRows() throws {
+        let (repo, folder) = try repository()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let item = MediaItem(id: "f-4", fileId: "f-4", mediaType: .series, title: "权力的游戏", tmdbId: 1399, matchConfidence: 1)
+        try repo.confirm(item, accountID: "account-a")
+        try repo.learnAlias(accountID: "account-a", mediaType: .series, sourceTitle: "Quan You", canonicalTitle: "权力的游戏", tmdbID: 1399)
+        let aliases = try repo.learnedAliases(accountID: "account-a")
+        XCTAssertEqual(aliases.count, 1)
+        XCTAssertEqual(aliases.first?.canonicalTitle, "权力的游戏")
+        try repo.removeLearnedAlias(accountID: "account-a", mediaType: .series, sourceTitle: "Quan You")
+        XCTAssertTrue(try repo.learnedAliases(accountID: "account-a").isEmpty)
+        XCTAssertEqual(try repo.confirmed(accountID: "account-a").first?.fileId, "f-4")
+    }
+
+
+    func testManualSeasonAndEpisodeValuesRemainOnConfirmedItem() throws {
+        let (repo, folder) = try repository()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let item = MediaItem(id: "f-3", fileId: "f-3", mediaType: .series, title: "权力的游戏", tmdbId: 1399,
+                             matchConfidence: 0.8, seasonNumber: 2, episodeNumber: 3)
+        try repo.confirm(item, accountID: "account-a")
+        let saved = try XCTUnwrap(repo.confirmed(accountID: "account-a").first)
+        XCTAssertEqual(saved.seasonNumber, 2)
+        XCTAssertEqual(saved.episodeNumber, 3)
+    }
 }
