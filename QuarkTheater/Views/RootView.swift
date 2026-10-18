@@ -430,6 +430,7 @@ private struct SettingsScreen: View {
     @State private var confirmClearMetadata = false
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
     @AppStorage("scraperLanguage") private var scraperLanguage = "zh-CN"
+    @AppStorage("playbackEngine") private var playbackEngine = "ksplayer"
 
     var body: some View {
         ScrollView {
@@ -515,6 +516,16 @@ private struct SettingsScreen: View {
                 }
 
                 Text("播放偏好").font(.title2.bold())
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("解码播放引擎").font(.headline)
+                    Picker("播放引擎", selection: $playbackEngine) {
+                        Text("KSPlayer (FFmpeg 强解 · 突破防盗链 / MKV / 多音轨)").tag("ksplayer")
+                        Text("系统原生 (AVPlayer)").tag("avplayer")
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 950)
+                }
+
                 Toggle("剧集自动连播下一集", isOn: $autoPlayNextEpisode)
                     .frame(maxWidth: 800)
 

@@ -67,12 +67,16 @@ def generate() -> dict[Path, str]:
     frameworks = add("group:Frameworks", "isa = PBXGroup; children = " + array([sqlite_ref]) + '; name = Frameworks; sourceTree = "<group>";')
     root_group = add("group:Root", "isa = PBXGroup; children = " + array([app_group, test_group, config_group, frameworks, products]) + '; sourceTree = "<group>";')
 
-    def phase(key: str, kind: str, references: list[str]) -> str:
-        build_files = [add("build:" + key + ":" + ref, "isa = PBXBuildFile; fileRef = " + ref + ";") for ref in references]
+    ksplayer_package = add("package:KSPlayer", 'isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/kingslay/KSPlayer.git"; requirement = { kind = upToNextMajorVersion; minimumVersion = "2.3.0"; };')
+    ksplayer_product = add("productDep:KSPlayer", "isa = XCSwiftPackageProductDependency; package = " + ksplayer_package + '; productName = KSPlayer;')
+    ksplayer_build_file = add("build:app:frameworks:KSPlayer", "isa = PBXBuildFile; productRef = " + ksplayer_product + ";")
+
+    def phase(key: str, kind: str, references: list[str], extra_build_files: list[str] = []) -> str:
+        build_files = [add("build:" + key + ":" + ref, "isa = PBXBuildFile; fileRef = " + ref + ";") for ref in references] + extra_build_files
         return add("phase:" + key, "isa = " + kind + "; buildActionMask = 2147483647; files = " + array(build_files) + "; runOnlyForDeploymentPostprocessing = 0;")
     app_phases = [
         phase("app:sources", "PBXSourcesBuildPhase", [source_refs[p.relative_to(ROOT).as_posix()] for p in app_sources]),
-        phase("app:frameworks", "PBXFrameworksBuildPhase", [sqlite_ref]),
+        phase("app:frameworks", "PBXFrameworksBuildPhase", [sqlite_ref], extra_build_files=[ksplayer_build_file]),
         phase("app:resources", "PBXResourcesBuildPhase", [assets_ref] if assets_ref else []),
     ]
     test_phases = [
@@ -123,9 +127,9 @@ def generate() -> dict[Path, str]:
     test_id = identifier("target:test")
     proxy = add("proxy:app", "isa = PBXContainerItemProxy; containerPortal = " + project_id + "; proxyType = 1; remoteGlobalIDString = " + app_id + "; remoteInfo = QuarkTheater;")
     dependency = add("dependency:test:app", "isa = PBXTargetDependency; target = " + app_id + "; targetProxy = " + proxy + ";")
-    add("target:app", "isa = PBXNativeTarget; buildConfigurationList = " + app_config + "; buildPhases = " + array(app_phases) + "; buildRules = (); dependencies = (); name = QuarkTheater; productName = QuarkTheater; productReference = " + app_product + '; productType = "com.apple.product-type.application";')
+    add("target:app", "isa = PBXNativeTarget; buildConfigurationList = " + app_config + "; buildPhases = " + array(app_phases) + "; buildRules = (); dependencies = (); name = QuarkTheater; packageProductDependencies = " + array([ksplayer_product]) + "; productName = QuarkTheater; productReference = " + app_product + '; productType = "com.apple.product-type.application";')
     add("target:test", "isa = PBXNativeTarget; buildConfigurationList = " + test_config + "; buildPhases = " + array(test_phases) + "; buildRules = (); dependencies = " + array([dependency]) + "; name = QuarkTheaterTests; productName = QuarkTheaterTests; productReference = " + test_product + '; productType = "com.apple.product-type.bundle.unit-test";')
-    add("project", 'isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = { ' + app_id + ' = { CreatedOnToolsVersion = 16.0; }; ' + test_id + ' = { CreatedOnToolsVersion = 16.0; TestTargetID = ' + app_id + '; }; }; }; buildConfigurationList = ' + project_config + '; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh-Hans; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base); mainGroup = ' + root_group + '; productRefGroup = ' + products + '; projectDirPath = ""; projectRoot = ""; targets = ' + array([app_id, test_id]) + ";")
+    add("project", 'isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = { ' + app_id + ' = { CreatedOnToolsVersion = 16.0; }; ' + test_id + ' = { CreatedOnToolsVersion = 16.0; TestTargetID = ' + app_id + '; }; }; }; buildConfigurationList = ' + project_config + '; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh-Hans; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base); mainGroup = ' + root_group + '; packageReferences = ' + array([ksplayer_package]) + '; productRefGroup = ' + products + '; projectDirPath = ""; projectRoot = ""; targets = ' + array([app_id, test_id]) + ";")
     pbx = "// !$*UTF8*$!\n{\n\tarchiveVersion = 1;\n\tclasses = {};\n\tobjectVersion = 56;\n\tobjects = {\n"
     pbx += "".join("\t\t" + key + " = { " + value + " };\n" for key, value in sorted(objects.items()))
     pbx += "\t};\n\trootObject = " + project_id + ";\n}\n"

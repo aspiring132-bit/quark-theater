@@ -1,4 +1,5 @@
 import AVKit
+import KSPlayer
 import SwiftUI
 
 @MainActor
@@ -42,8 +43,11 @@ struct PlayerScreen: View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
-            // 1. Full-screen Video Player
-            if let player = coordinator.player {
+            // 1. Full-screen Video Player (KSPlayer FFmpeg or Native AVPlayer)
+            if let ksURL = coordinator.ksPlayerURL, let ksOptions = coordinator.ksPlayerOptions {
+                KSVideoPlayer(coordinator: coordinator.ksCoordinator, url: ksURL, options: ksOptions)
+                    .ignoresSafeArea()
+            } else if let player = coordinator.player {
                 VideoPlayer(player: player)
                     .ignoresSafeArea()
             } else if coordinator.isLoading {
@@ -78,7 +82,7 @@ struct PlayerScreen: View {
             }
 
             // 2. Bottom Drawer Trigger Pill (auto fades after 3s)
-            if !showDrawer && coordinator.player != nil && showHintPill {
+            if !showDrawer && coordinator.hasActivePlayer && showHintPill {
                 Button {
                     openDrawer()
                 } label: {
@@ -132,6 +136,9 @@ struct PlayerScreen: View {
         .onDisappear { coordinator.stop() }
         .onMoveCommand { direction in
             handleMoveCommand(direction)
+        }
+        .onPlayPauseCommand {
+            coordinator.togglePlayPause()
         }
     }
 

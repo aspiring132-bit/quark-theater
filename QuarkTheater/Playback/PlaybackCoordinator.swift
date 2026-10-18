@@ -1,9 +1,29 @@
 import AVFoundation
 import Combine
 import Foundation
+@preconcurrency import KSPlayer
+
+enum PlaybackEngine: String, CaseIterable, Identifiable {
+    case ksplayer = "ksplayer"
+    case avplayer = "avplayer"
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .ksplayer: return "KSPlayer (FFmpeg 强解 · 突破防盗链 / MKV / 多音轨)"
+        case .avplayer: return "系统原生 (AVPlayer)"
+        }
+    }
+}
 
 @MainActor
 final class PlaybackCoordinator: ObservableObject {
+    @Published private(set) var activeEngine: PlaybackEngine = .ksplayer
+    @Published private(set) var ksPlayerURL: URL?
+    @Published private(set) var ksPlayerOptions: KSOptions?
+    @Published private(set) var isPlaying: Bool = false
+    public let ksCoordinator = KSVideoPlayer.Coordinator()
+
     @Published private(set) var player: AVPlayer?
     @Published private(set) var message: String?
     @Published private(set) var isLoading = false
@@ -32,6 +52,10 @@ final class PlaybackCoordinator: ObservableObject {
     private var restoredPosition: Double = 0
     private var generation = 0
 
+    var hasActivePlayer: Bool {
+        ksPlayerURL != nil || player != nil
+    }
+
     init(client: QuarkClient, accountID: String, file: CloudFile, queue: [CloudFile] = [],
          automaticallyPlayNext: Bool = false, history: HistoryRepository, diagnostics: Diagnostics) {
         self.client = client
@@ -44,7 +68,7 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     func start() async {
-        guard !isLoading, player == nil else { return }
+        guard !isLoading, !hasActivePlayer else { return }
         isLoading = true
         defer { isLoading = false }
         do {
@@ -55,9 +79,18 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     func saveProgress() {
-        guard let player else { return }
-        let position = max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0)
-        let duration = max(0, player.currentItem?.duration.seconds.isFinite == true ? player.currentItem!.duration.seconds : 0)
+        var position: Double = 0
+        var duration: Double = 0
+        if activeEngine == .ksplayer {
+            if let p = ksCoordinator.playerLayer?.player {
+                position = max(0, p.currentPlaybackTime)
+                duration = max(0, p.duration)
+            }
+        } else if let player {
+            position = max(0, player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0)
+            duration = max(0, player.currentItem?.duration.seconds.isFinite == true ? player.currentItem!.duration.seconds : 0)
+        }
+        guard duration > 0 || position > 0 else { return }
         let completed = duration > 0 && position >= duration * 0.95
         let record = WatchHistory(accountId: accountID, fileId: currentFile.fileId,
             fileName: currentFile.name,
@@ -65,6 +98,28 @@ final class PlaybackCoordinator: ObservableObject {
             lastWatchedAt: Date(), completed: completed)
         do { try history.save(record) }
         catch { diagnostics.record("观看进度保存失败：\(error.localizedDescription)") }
+    }
+
+    func togglePlayPause() {
+        if activeEngine == .ksplayer {
+            if let p = ksCoordinator.playerLayer?.player {
+                if p.isPlaying {
+                    ksCoordinator.playerLayer?.pause()
+                    isPlaying = false
+                } else {
+                    ksCoordinator.playerLayer?.play()
+                    isPlaying = true
+                }
+            }
+        } else if let player {
+            if player.timeControlStatus == .playing {
+                player.pause()
+                isPlaying = false
+            } else {
+                player.play()
+                isPlaying = true
+            }
+        }
     }
 
     func retry() {
@@ -130,14 +185,13 @@ final class PlaybackCoordinator: ObservableObject {
         generation &+= 1
         retryTask?.cancel()
         saveProgress()
-        if let periodicObserver, let player { player.removeTimeObserver(periodicObserver) }
-        periodicObserver = nil
-        itemObservers.forEach(NotificationCenter.default.removeObserver)
-        itemObservers.removeAll()
-        itemStatusObserver?.invalidate()
-        itemStatusObserver = nil
+        detachObservers()
         player?.pause()
         player = nil
+        ksCoordinator.resetPlayer()
+        ksPlayerURL = nil
+        ksPlayerOptions = nil
+        isPlaying = false
     }
 
     private func resolveAndPlay(at position: Double) async throws {
@@ -165,38 +219,108 @@ final class PlaybackCoordinator: ObservableObject {
             customHeaders["Cookie"] = cookieHeader
         }
 
-        let options: [String: Any] = [
-            AVURLAssetHTTPUserAgentKey: customHeaders["User-Agent"] ?? "",
-            AVURLAssetHTTPCookiesKey: applicableCookies,
-            "AVURLAssetHTTPHeaderFieldsKey": customHeaders
-        ]
-        let asset = AVURLAsset(url: resource.url, options: options)
-        let item = AVPlayerItem(asset: asset)
+        let engineSetting = UserDefaults.standard.string(forKey: "playbackEngine") ?? "ksplayer"
+        if engineSetting == "ksplayer" {
+            activeEngine = .ksplayer
+            KSOptions.firstPlayerType = KSMEPlayer.self
+            let options = KSOptions()
+            options.appendHeader(customHeaders)
+            options.setCookie(applicableCookies)
+            options.preferredForwardBufferDuration = 60.0
 
-        // Large file (e.g. 6GB 4K/1080P) streaming optimizations:
-        // 1. Buffer up to 60 seconds ahead instead of default 2s to absorb CDN jitter
-        item.preferredForwardBufferDuration = 60.0
-        // 2. Allow continuous buffering while paused/stalled
-        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        // 3. Keep full original bitrate
-        item.preferredPeakBitRate = 0
+            detachObservers()
+            player?.pause()
+            player = nil
 
-        let next = AVPlayer(playerItem: item)
-        // 4. Strictly synchronize audio and video; wait for buffer instead of dropping video frames
-        next.automaticallyWaitsToMinimizeStalling = true
+            self.ksPlayerOptions = options
+            self.ksPlayerURL = resource.url
+            self.audioOptions = []
+            self.subtitleOptions = []
+            self.audioGroup = nil
+            self.subtitleGroup = nil
 
-        detachObservers()
-        attachProgressObserver(to: next)
-        player?.pause()
-        player = next
-        audioOptions = []; subtitleOptions = []; audioGroup = nil; subtitleGroup = nil
-        Task { await loadMediaOptions(asset: asset, for: item, generation: requestGeneration) }
-        if position > 0 {
-            // seek(to:) is async in tvOS 26+ SDK; dispatch to avoid blocking the calling context.
-            Task { await next.seek(to: CMTime(seconds: position, preferredTimescale: 600)) }
+            ksCoordinator.onPlay = { [weak self] current, duration in
+                guard let self else { return }
+                if position > 0 && current < 1.0 {
+                    self.ksCoordinator.seek(time: position)
+                }
+                self.isPlaying = true
+            }
+            ksCoordinator.onStateChanged = { [weak self] _, state in
+                guard let self else { return }
+                switch state {
+                case .buffering:
+                    self.isBuffering = true
+                    self.isPlaying = true
+                case .readyToPlay, .bufferFinished:
+                    self.isBuffering = false
+                    self.isPlaying = true
+                case .paused:
+                    self.isPlaying = false
+                case .error:
+                    self.report(QuarkError.unsupportedPlayback("KSPlayer 解码播放异常，已为您记录诊断。"))
+                default:
+                    break
+                }
+            }
+            ksCoordinator.onBufferChanged = { [weak self] bufferedCount, consumeTime in
+                guard let self else { return }
+                if bufferedCount > 0 && consumeTime > 0 {
+                    let speedKB = Double(bufferedCount) / Double(consumeTime) / 1024.0
+                    if speedKB > 1024 {
+                        self.networkSpeedText = String(format: "%.1f MB/s", speedKB / 1024.0)
+                    } else {
+                        self.networkSpeedText = String(format: "%.0f KB/s", speedKB)
+                    }
+                }
+            }
+            ksCoordinator.onFinish = { [weak self] _, _ in
+                guard let self else { return }
+                self.playbackEnded()
+            }
+            diagnostics.record("开始 KSPlayer (FFmpeg) 播放请求：\(requestedFile.name)")
+        } else {
+            activeEngine = .avplayer
+            ksCoordinator.resetPlayer()
+            ksPlayerURL = nil
+            ksPlayerOptions = nil
+
+            let options: [String: Any] = [
+                AVURLAssetHTTPUserAgentKey: customHeaders["User-Agent"] ?? "",
+                AVURLAssetHTTPCookiesKey: applicableCookies,
+                "AVURLAssetHTTPHeaderFieldsKey": customHeaders
+            ]
+            let asset = AVURLAsset(url: resource.url, options: options)
+            let item = AVPlayerItem(asset: asset)
+
+            // Large file (e.g. 6GB 4K/1080P) streaming optimizations:
+            // 1. Buffer up to 60 seconds ahead instead of default 2s to absorb CDN jitter
+            item.preferredForwardBufferDuration = 60.0
+            // 2. Allow continuous buffering while paused/stalled
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            // 3. Keep full original bitrate
+            item.preferredPeakBitRate = 0
+
+            let next = AVPlayer(playerItem: item)
+            // 4. Strictly synchronize audio and video; wait for buffer instead of dropping video frames
+            next.automaticallyWaitsToMinimizeStalling = true
+
+            detachObservers()
+            attachProgressObserver(to: next)
+            player?.pause()
+            player = next
+            audioOptions = []
+            subtitleOptions = []
+            audioGroup = nil
+            subtitleGroup = nil
+            Task { await loadMediaOptions(asset: asset, for: item, generation: requestGeneration) }
+            if position > 0 {
+                // seek(to:) is async in tvOS 26+ SDK; dispatch to avoid blocking the calling context.
+                Task { await next.seek(to: CMTime(seconds: position, preferredTimescale: 600)) }
+            }
+            next.play()
+            diagnostics.record("开始 AVPlayer 原生播放请求：\(requestedFile.name)")
         }
-        next.play()
-        diagnostics.record("开始播放请求：\(requestedFile.name)")
     }
 
     private func loadMediaOptions(asset: AVURLAsset, for item: AVPlayerItem, generation: Int) async {
@@ -307,6 +431,9 @@ final class PlaybackCoordinator: ObservableObject {
         bufferEmptyObserver = nil
         timeControlObserver?.invalidate()
         timeControlObserver = nil
+        ksCoordinator.resetPlayer()
+        ksPlayerURL = nil
+        ksPlayerOptions = nil
     }
 
     private func handlePlaybackFailure(_ error: Error) {

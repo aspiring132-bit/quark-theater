@@ -8,6 +8,13 @@ struct ScannedMediaCandidate: Identifiable, Equatable {
     /// The ancestor series folder name (e.g. "G 高堡奇人S01~S04", "【美剧】大西洋帝国.全5季.中英双字.1080P").
     let ancestorFolderName: String?
     var id: String { file.fileId }
+
+    init(file: CloudFile, parsedName: ParsedMediaName, parentFolderName: String? = nil, ancestorFolderName: String? = nil) {
+        self.file = file
+        self.parsedName = parsedName
+        self.parentFolderName = parentFolderName
+        self.ancestorFolderName = ancestorFolderName
+    }
 }
 
 @MainActor

@@ -8,6 +8,15 @@ struct ParsedMediaName: Equatable {
     let episodeNumber: Int?
     /// If the title came from a parent folder rather than the filename itself, this is set.
     let inferredFromParent: Bool
+
+    init(title: String, year: Int? = nil, mediaType: MediaType, seasonNumber: Int? = nil, episodeNumber: Int? = nil, inferredFromParent: Bool = false) {
+        self.title = title
+        self.year = year
+        self.mediaType = mediaType
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+        self.inferredFromParent = inferredFromParent
+    }
 }
 
 enum FilenameParser {

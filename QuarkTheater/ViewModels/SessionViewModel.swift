@@ -26,6 +26,9 @@ final class SessionViewModel: ObservableObject {
             diagnostics.recordError(error, context: "初始化真实客户端")
         }
         diagnostics.record(isMock ? "显式 Mock 模式；未连接夸克" : "真实接口模式；等待账号验证")
+        if ProcessInfo.processInfo.arguments.contains("--mock-demo") {
+            enterMockDemo()
+        }
     }
 
     func restore() async {
