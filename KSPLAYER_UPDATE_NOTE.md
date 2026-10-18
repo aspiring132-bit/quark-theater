@@ -4,10 +4,10 @@
 
 ## 📌 身份与时间信息
 
-* **编写者 / 执行者**：**Antigravity**（由 Google DeepMind 打造的结对编程 AI 智能助手，当前调度模型：Gemini 3.8 Flash）
+* **编写者 / 执行者**：**Antigravity**（历史阶段记录；本页末尾的 Codex follow-up 记录后续合并与部署事实）
 * **更新时间**：**2026 年 10 月 18 日 15:30（GMT+2）**
-* **所在分支**：`feature/ksplayer-evaluation`
-  > ⚠️ **主分支安全声明**：根据用户明确要求，本次评估与改造**未对 `main` 主分支做任何修改**，主分支保持绝对干净；待用户在实体设备（主卧 Apple TV）充分测试 4K 流媒体播放验证通过后，方可安排合并。
+* **所在分支**：`feature/ksplayer-evaluation`（历史阶段）
+  > ⚠️ **历史声明**：以下原始报告写作时尚未合并 `main`；该状态已由文末 Codex follow-up 更新。
 
 ---
 
@@ -51,9 +51,9 @@
 
 ### 6. 实体 Apple TV 硬件设备部署（主卧）与免 Mock 真实 4K 播放
 * **目标硬件设备**：Apple TV 4K（名称：**主卧**，设备 UDID：`00008110-001404CC02F1801E`，架构：`arm64`，系统：`tvOS 26.0+`）。
-* **自动化签名打通**：
-  * 开发团队（Team ID）：`LY2UZ2U7D2`（`aspiring.ad@outlook.com`）。
-  * 在 [generate_xcode_project.py](file:///Users/wangbin/Documents/antigravity/zealous-darwin/quark-theater/scripts/generate_xcode_project.py) 中注入 target 属性 `DevelopmentTeam = LY2UZ2U7D2` 与 `ProvisioningStyle = Automatic`。
+* **自动化签名打通**（历史记录）：
+  * 原始报告记录的开发团队（Team ID）为 `LY2UZ2U7D2`（`aspiring.ad@outlook.com`）；文末记录了本次设备构建发现并修正的实际 Team ID。
+  * 原始报告称在 [generate_xcode_project.py](file:///Users/wangbin/Documents/antigravity/zealous-darwin/quark-theater/scripts/generate_xcode_project.py) 中注入 `DevelopmentTeam = LY2UZ2U7D2` 与 `ProvisioningStyle = Automatic`；该 Team ID 属于历史配置，当前签名以 `Config/Shared.xcconfig` 的 `SC922VXN5U` 为准。
   * 成功请求 Apple 开发者中心在线签发：`tvOS Team Provisioning Profile: org.quarktheater.app.wangbin`（UUID: `3bc3ec6e-b646-4c88-82ef-600627c1878c`）。
 * **真机构建与安装**：
   * 使用 `xcodebuild -destination 'id=00008110-001404CC02F1801E' -allowProvisioningUpdates build` 编译完成，退出码 0（`** BUILD SUCCEEDED **`）。
@@ -74,6 +74,41 @@
 
 ## 🛠️ 后续操作与合并指引
 
-当前测试分支状态：`feature/ksplayer-evaluation`，主分支 `main` 保持未变。
+> 以下合并指引属于历史记录；当前 `main` 状态与部署结果以文末 Codex follow-up 为准。
 1. **电视端扫码与 4K 播放**：请在“主卧”电视前使用夸克 App 扫码登录，选择网盘中的 4K 影片（如 4K MKV/HEVC、高码率原画），测试 KSPlayer 解码是否流畅、音轨字幕切换是否正常。
 2. **合并确认**：待您在“主卧”实测满意后，告知我即可安全地将本分支合并至 `main`。
+
+---
+
+## ✅ Codex follow-up：合并、签名修正与设备覆盖安装（2026-10-18）
+
+本节记录本次实际执行结果，覆盖并更正上文中“主分支未变 / 待合并”的历史状态；上文其他内容保留作为此前阶段的历史报告。
+
+### GitHub 合并
+
+* PR [#1](https://github.com/aspiring132-bit/quark-theater/pull/1) 已于 **2026-10-18 14:17 UTC** 合并到 GitHub `main`。
+* 合并提交：`69dcf4af6aa6310b34bb3660e4edfa7890608670`。
+* 本次目标是合并到 GitHub `main`，不是 App Store 生产发布。
+
+### Apple 账户与签名修正
+
+* Xcode 的 Apple Account 已存在：`wang aurelien / aspiring.ad@outlook.com`。
+* 签名失败原因不是账户缺失，而是 `Config/Shared.xcconfig` 中的 Team ID 错误：已由 `LY2UZ2U7D2` 修正为 `SC922VXN5U`。
+* 修正依据：本机 Apple Development 证书及缓存的 tvOS provisioning profile 均标识 Team `SC922VXN5U`。
+* 使用 Xcode 27（`Xcode_27_beta_6`）从合并后的源码完成 arm64 tvOS 签名构建，结果为 `** BUILD SUCCEEDED **`。
+* 构建产物：`QuarkTheater.app`；Bundle ID `org.quarktheater.app.wangbin`；版本 `0.1.0 (1)`。
+* 嵌入 profile UUID：`3bc3ec6e-b646-4c88-82ef-600627c1878c`；profile Team：`SC922VXN5U`。
+* `codesign --verify --deep --strict` 校验通过，签名满足 designated requirement。
+
+### 主卧设备覆盖安装与启动
+
+* 设备：Apple TV 4K（第 3 代），名称 **主卧**，UDID `00008110-001404CC02F1801E`。
+* 使用 `xcrun devicectl device install app` 成功覆盖安装同 Bundle ID 的现有 Quark Theater；未卸载应用。
+* `devicectl device info apps` 查询确认设备上的版本/构建号为 `0.1.0 (1)`。
+* 使用 `xcrun devicectl device process launch` 成功启动 `org.quarktheater.app.wangbin`。
+
+### 验证边界
+
+* 已完成：源码合并、签名构建、代码签名校验、实体设备覆盖安装及进程启动。
+* 未通过自动化完成：Siri Remote 实际按键、夸克登录、真实网盘媒体播放、4K 流、音频与字幕切换等人工交互测试；这些仍需在“主卧”设备前由用户实测确认。
+* XCTest 运行时未执行成功：模拟器服务返回 `DTServiceHubClient failed to bless service hub`。PR #1 阶段的 simulator `build-for-testing` 退出码为 0，但这不等同于 XCTest 已运行通过。
