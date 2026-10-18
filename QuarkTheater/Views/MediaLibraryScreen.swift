@@ -3,6 +3,7 @@ import SwiftUI
 struct RematchSheetTarget: Identifiable {
     let item: MediaItem
     let files: [CloudFile]
+    let candidates: [ScannedMediaCandidate]
     var id: String { item.id }
 }
 
@@ -14,15 +15,14 @@ struct MediaLibraryScreen: View {
     let tokenStore: TMDBCredentialStore
     let catalog: MediaCatalogRepository
     let diagnostics: Diagnostics
-    @Binding var isDockHidden: Bool
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var candidates: [ScannedMediaCandidate] = []
     @State private var confirmed: [MediaItem] = []
     @State private var focusedItem: MediaItem?
     @FocusState private var focusedPosterID: String?
-    @FocusState private var isHeroFocused: Bool
-    @FocusState private var isFilterFocused: Bool
+    @FocusState private var focusedHeroAction: LibraryFocusTarget?
+    @FocusState private var focusedFilter: LibraryFocusTarget?
 
     // Selected item for full Netflix/Apple TV style MediaItemDetailScreen
     @State private var selectedDetailItem: MediaItem?
@@ -89,7 +89,11 @@ struct MediaLibraryScreen: View {
                 modifiedAt: nil,
                 isDirectory: false
             )
-            return (metadata, file, FilenameParser.parse(file.name))
+            let parsed = candidates.first(where: { $0.file.fileId == metadata.fileId })?.parsedName
+                ?? ParsedMediaName(title: metadata.title, year: metadata.year, mediaType: metadata.mediaType,
+                                   seasonNumber: metadata.seasonNumber, episodeNumber: metadata.episodeNumber,
+                                   inferredFromParent: true)
+            return (metadata, file, parsed)
         }.sorted {
             if $0.2.seasonNumber != $1.2.seasonNumber {
                 return ($0.2.seasonNumber ?? 0) < ($1.2.seasonNumber ?? 0)
@@ -117,7 +121,9 @@ struct MediaLibraryScreen: View {
                             FilterPillButton(
                                 title: title,
                                 isSelected: category == tag,
-                                minWidth: 88
+                                minWidth: 88,
+                                focusTarget: .filter(tag),
+                                focusedTarget: $focusedFilter
                             ) {
                                 category = tag
                             }
@@ -130,7 +136,9 @@ struct MediaLibraryScreen: View {
                             FilterPillButton(
                                 title: title,
                                 isSelected: sortMode == tag,
-                                minWidth: 96
+                                minWidth: 96,
+                                focusTarget: .filter(tag),
+                                focusedTarget: $focusedFilter
                             ) {
                                 sortMode = tag
                             }
@@ -330,41 +338,19 @@ struct MediaLibraryScreen: View {
             .padding(.bottom, 60)
         }
         .ignoresSafeArea(edges: .top)
-        .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
-            geometry.contentOffset.y
-        }) { _, newOffset in
-            let shouldHide = newOffset > 60
-            if isDockHidden != shouldHide {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    isDockHidden = shouldHide
-                }
-            }
-        }
-        .onChange(of: isHeroFocused) { _, isFocused in
-            if isFocused {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    isDockHidden = false
-                }
-            }
-        }
-        .onChange(of: isFilterFocused) { _, isFocused in
-            if isFocused {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    isDockHidden = true
-                }
-            }
-        }
         .onChange(of: focusedPosterID) { _, newID in
             if let newID, let match = posterItems.first(where: { $0.id == newID }) {
+                diagnostics.recordFocusTransition(.mediaPoster)
                 withAnimation(.easeInOut(duration: 0.25)) {
                     focusedItem = match
                 }
             }
-            if newID != nil {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    isDockHidden = true
-                }
-            }
+        }
+        .onChange(of: focusedHeroAction) { _, action in
+            if action != nil { diagnostics.recordFocusTransition(.mediaHeroAction) }
+        }
+        .onChange(of: focusedFilter) { _, filter in
+            if filter != nil { diagnostics.recordFocusTransition(.mediaFilter) }
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -429,6 +415,7 @@ struct MediaLibraryScreen: View {
             TMDBMatchScreen(
                 item: target.item,
                 relatedFiles: target.files,
+                relatedCandidates: target.candidates,
                 accountID: accountID,
                 tokenStore: tokenStore,
                 catalog: catalog,
@@ -568,7 +555,7 @@ struct MediaLibraryScreen: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.cyan)
-                        .focused($isHeroFocused)
+                        .focused($focusedHeroAction, equals: .heroDetails)
 
                         // 1-Click Quick Play
                         Button {
@@ -587,11 +574,18 @@ struct MediaLibraryScreen: View {
                             .padding(.vertical, 12)
                         }
                         .buttonStyle(.bordered)
-                        .focused($isHeroFocused)
+                        .focused($focusedHeroAction, equals: .heroPlay)
 
                         // Rematch Button
                         Button {
-                            rematchTarget = RematchSheetTarget(item: item, files: episodes.map(\.1))
+                            let episodeCandidates = episodes.map { episode in
+                                TMDBMatchScreen.rematchCandidate(
+                                    for: episode.1,
+                                    parsedName: episode.2,
+                                    candidates: candidates
+                                )
+                            }
+                            rematchTarget = RematchSheetTarget(item: item, files: episodes.map(\.1), candidates: episodeCandidates)
                         } label: {
                             Label("重新匹配", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.headline)
@@ -600,7 +594,7 @@ struct MediaLibraryScreen: View {
                                 .padding(.vertical, 12)
                         }
                         .buttonStyle(.bordered)
-                        .focused($isHeroFocused)
+                        .focused($focusedHeroAction, equals: .heroRematch)
                     }
 
                     // MARK: - Direct Episode Rail for Series (选集速播轨)
@@ -636,7 +630,7 @@ struct MediaLibraryScreen: View {
                                             )
                                         }
                                         .buttonStyle(.borderless)
-                                        .focused($isHeroFocused)
+                                        .focused($focusedHeroAction, equals: .episode(ep.1.fileId))
                                     }
                                 }
                                 .padding(.vertical, 4)
@@ -720,8 +714,10 @@ struct MediaLibraryScreen: View {
         }
 
         do {
-            let boundIDs = Array(BoundFolderStore.boundFolderIDs(accountID: accountID))
-            candidates = try await MediaLibraryScanner().scan(client: client, folderIDs: boundIDs) { count in
+            let boundIDs = BoundFolderStore.boundFolderIDs(accountID: accountID)
+            let names = BoundFolderStore.boundFolderNames(accountID: accountID)
+            let roots = boundIDs.sorted().map { MediaScanRoot(id: $0, name: names[$0]) }
+            candidates = try await MediaLibraryScanner().scan(client: client, roots: roots) { count in
                 if !silent {
                     statusProgress = "已扫描 \(count) 个文件…"
                 }
@@ -747,7 +743,12 @@ struct MediaLibraryScreen: View {
     }
 
     private func autoMatchUnmatched(silent: Bool = false) async {
-        let unconfirmed = candidates.filter { !confirmedIDs.contains($0.file.fileId) }
+        let unconfirmed = candidates.filter {
+            !confirmedIDs.contains($0.file.fileId) &&
+            $0.parsedName.unresolvedReason == nil &&
+            $0.parsedName.mediaType != .unknown &&
+            !$0.parsedName.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
         guard !unconfirmed.isEmpty else {
             if !silent { message = "当前所有文件均已完成匹配。" }
             return
@@ -763,6 +764,7 @@ struct MediaLibraryScreen: View {
 
         let groups = Dictionary(grouping: unconfirmed, by: { "\($0.parsedName.mediaType.rawValue):\($0.parsedName.title.lowercased())" })
         var matchedTitlesCount = 0
+        var failedGroups = 0
         let totalGroups = groups.count
         var groupIndex = 0
 
@@ -775,16 +777,56 @@ struct MediaLibraryScreen: View {
 
             do {
                 let token = tokenStore.effectiveToken()
-                let raw = try await TMDBService().search(
-                    first.parsedName,
-                    apiReadToken: token,
-                    language: scraperLanguage,
-                    parentFolderName: first.parentFolderName,
-                    ancestorFolderName: first.ancestorFolderName
-                )
-                let ranked = MediaMatchScorer.rank(raw, for: first.parsedName, ancestorFolderName: first.ancestorFolderName)
+                let learnedRecords = try catalog.learnedAliasRecords(accountID: accountID, mediaType: first.parsedName.mediaType, sourceTitle: first.parsedName.title)
+                // TMDBService already expands built-in aliases and query variants.
+                // Keep learned expansion bounded to the source title plus one
+                // canonical title to avoid multiplicative request amplification.
+                var queryTitles = [first.parsedName.title]
+                if let canonical = learnedRecords.first?.canonicalTitle,
+                   MediaAliasResolver.normalizeTitle(canonical) != MediaAliasResolver.normalizeTitle(first.parsedName.title) {
+                    queryTitles.append(canonical)
+                }
+                var raw: [TMDBSearchResult] = []
+                var seen = Set<String>()
+                var groupHadRequestFailure = false
+                // Search the source title first.  A non-empty but weak result
+                // must not suppress a learned canonical fallback: aggregate
+                // both successful result sets, then apply the strict margin
+                // rule to the combined ranking.
+                for variant in queryTitles.prefix(2) {
+                    var parsed = first.parsedName
+                    parsed = ParsedMediaName(title: variant, year: parsed.year, mediaType: parsed.mediaType,
+                                             seasonNumber: parsed.seasonNumber, episodeNumber: parsed.episodeNumber,
+                                             inferredFromParent: parsed.inferredFromParent, unresolvedReason: parsed.unresolvedReason)
+                    let rows: [TMDBSearchResult]
+                    do {
+                        rows = try await TMDBService(diagnostics: diagnostics).search(parsed, apiReadToken: token, language: scraperLanguage,
+                                                                 parentFolderName: first.parentFolderName, ancestorFolderName: first.ancestorFolderName)
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        groupHadRequestFailure = true
+                        diagnostics.recordError(error, context: "TMDB 自动刮削请求")
+                        continue
+                    }
+                    for row in rows {
+                        let key = "\(row.sourceMediaType?.rawValue ?? "unknown"):\(row.id)"
+                        if seen.insert(key).inserted { raw.append(row) }
+                    }
+                    let provisional = MediaMatchScorer.rank(raw, for: first.parsedName,
+                                                            ancestorFolderName: first.ancestorFolderName,
+                                                            learnedAliasRecords: learnedRecords)
+                    if MediaMatchScorer.mayAutoConfirm(provisional) { break }
+                }
+                let ranked = MediaMatchScorer.rank(raw, for: first.parsedName,
+                                                    ancestorFolderName: first.ancestorFolderName,
+                                                    learnedAliasRecords: learnedRecords)
 
-                if let best = ranked.first, best.confidence >= 0.58 {
+                if raw.isEmpty && groupHadRequestFailure {
+                    failedGroups += 1
+                }
+
+                if MediaMatchScorer.mayAutoConfirm(ranked), let best = ranked.first {
                     for candidate in groupCandidates {
                         let item = MediaItem(
                             id: candidate.file.fileId,
@@ -819,6 +861,8 @@ struct MediaLibraryScreen: View {
                 message = "批量刮削完成：已成功匹配并入库 \(matchedTitlesCount) 部影视海报！"
             }
             diagnostics.record("自动刮削完成：成功匹配 \(matchedTitlesCount) 部影视")
+        } else if !silent && failedGroups == totalGroups {
+            message = "批量刮削请求失败：请检查网络或 TMDB 配置后重试。"
         } else if !silent {
             message = "批量刮削完成：未找到匹配度更高的海报，可点击单条“手动匹配 TMDB”输入关键字搜索。"
         }
@@ -841,9 +885,11 @@ private struct FilterPillButton: View {
     let title: String
     let isSelected: Bool
     let minWidth: CGFloat
+    let focusTarget: LibraryFocusTarget
+    @FocusState.Binding var focusedTarget: LibraryFocusTarget?
     let action: () -> Void
 
-    @FocusState private var isFocused: Bool
+    private var isFocused: Bool { focusedTarget == focusTarget }
 
     var body: some View {
         Button(action: action) {
@@ -879,6 +925,6 @@ private struct FilterPillButton: View {
                 .animation(.spring(response: 0.2, dampingFraction: 0.75), value: isFocused)
         }
         .buttonStyle(.plain)
-        .focused($isFocused)
+        .focused($focusedTarget, equals: focusTarget)
     }
 }

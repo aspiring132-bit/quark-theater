@@ -7,7 +7,29 @@ struct ScannedMediaCandidate: Identifiable, Equatable {
     let parentFolderName: String?
     /// The ancestor series folder name (e.g. "G 高堡奇人S01~S04", "【美剧】大西洋帝国.全5季.中英双字.1080P").
     let ancestorFolderName: String?
+    /// Complete named folder context from the bound root to the file's parent.
+    let pathComponents: [String]
+    init(file: CloudFile, parsedName: ParsedMediaName, parentFolderName: String?, ancestorFolderName: String?, pathComponents: [String] = []) {
+        self.file = file
+        self.parsedName = parsedName
+        self.parentFolderName = parentFolderName
+        self.ancestorFolderName = ancestorFolderName
+        self.pathComponents = pathComponents
+    }
     var id: String { file.fileId }
+
+    init(file: CloudFile, parsedName: ParsedMediaName, parentFolderName: String? = nil, ancestorFolderName: String? = nil) {
+        self.file = file
+        self.parsedName = parsedName
+        self.parentFolderName = parentFolderName
+        self.ancestorFolderName = ancestorFolderName
+        self.pathComponents = []
+    }
+}
+
+struct MediaScanRoot: Equatable {
+    let id: String
+    let name: String?
 }
 
 @MainActor
@@ -20,13 +42,22 @@ final class MediaLibraryScanner {
         folderIDs: [String] = [],
         progress: @escaping (Int) -> Void = { _ in }
     ) async throws -> [ScannedMediaCandidate] {
-        let initialFolders = folderIDs.isEmpty ? ["0"] : folderIDs
+        let roots = (folderIDs.isEmpty ? ["0"] : folderIDs).map { MediaScanRoot(id: $0, name: nil) }
+        return try await scan(client: client, roots: roots, progress: progress)
+    }
+
+    func scan(
+        client: QuarkClient,
+        roots: [MediaScanRoot],
+        progress: @escaping (Int) -> Void = { _ in }
+    ) async throws -> [ScannedMediaCandidate] {
+        let initialRoots = roots.isEmpty ? [MediaScanRoot(id: "0", name: nil)] : roots
         // Track: (id, depth, folderName, pathArray)
         // pathArray records all folder names from root down to this folder
-        var pending: [(id: String, depth: Int, folderName: String?, path: [String])] = initialFolders.map {
-            (id: $0, depth: 0, folderName: nil, path: [])
+        var pending: [(id: String, depth: Int, folderName: String?, path: [String], rootName: String?)] = initialRoots.map {
+            ($0.id, 0, nil, $0.name.map { [$0] } ?? [], $0.name)
         }
-        var visited = Set<String>(initialFolders)
+        var visited = Set<String>(initialRoots.map(\.id))
         var candidates: [ScannedMediaCandidate] = []
         var seenFiles = Set<String>()
         var cursor = 0
@@ -48,11 +79,11 @@ final class MediaLibraryScanner {
                         if visited.insert(file.fileId).inserted {
                             var childPath = folder.path
                             childPath.append(file.name)
-                            pending.append((file.fileId, folder.depth + 1, file.name, childPath))
+                            pending.append((file.fileId, folder.depth + 1, file.name, childPath, folder.rootName))
                         }
                     } else if file.isVideo {
                         // Extract show title and season from the entire folder hierarchy
-                        let (detectedShow, detectedSeason) = FilenameParser.extractShowAndSeason(fromPath: folder.path)
+                        let (detectedShow, detectedSeason) = FilenameParser.extractShowAndSeason(fromPath: folder.path, boundRootName: folder.rootName)
                         
                         let immediateParent = folder.folderName
                         let ancestor = folder.path.count >= 2 ? folder.path[folder.path.count - 2] : nil
@@ -68,7 +99,8 @@ final class MediaLibraryScanner {
                             file: file,
                             parsedName: parsed,
                             parentFolderName: immediateParent,
-                            ancestorFolderName: detectedShow ?? ancestor
+                            ancestorFolderName: detectedShow ?? ancestor,
+                            pathComponents: folder.path
                         ))
                     }
                     guard seenFiles.count <= maximumFiles else {

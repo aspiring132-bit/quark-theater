@@ -10,16 +10,31 @@ enum MediaMatchScorer {
     static func rank(
         _ results: [TMDBSearchResult],
         for parsed: ParsedMediaName,
-        ancestorFolderName: String? = nil
+        ancestorFolderName: String? = nil,
+        learnedAliasRecords: [LearnedAlias] = []
     ) -> [ScoredTMDBResult] {
-        results.map { result in
+        results.filter { result in
+            guard let sourceType = result.sourceMediaType else { return true }
+            return parsed.mediaType == .unknown || sourceType == parsed.mediaType
+        }.map { result in
             let candidateDisplay = normalize(result.displayTitle)
             let candidateOriginal = normalize(result.effectiveOriginalTitle)
             let source = normalize(parsed.title)
             let ancestor = ancestorFolderName.map(normalize) ?? ""
+            let aliases = MediaAliasResolver.variants(for: parsed.title).map(normalize)
+            let identityBoundAliases = learnedAliasRecords
+                .filter { $0.mediaType == parsed.mediaType && $0.sourceTitle == MediaAliasResolver.normalizeTitle(parsed.title) && $0.tmdbID == result.id }
+                .map { normalize($0.canonicalTitle) }
 
             var titleScore: Double = 0
-            if candidateDisplay == source || candidateOriginal == source {
+            let exactTitle = candidateDisplay == source || candidateOriginal == source
+            if exactTitle {
+                // A typed series title plus explicit season/episode context is
+                // strong evidence even when TMDB has no year to compare.
+                titleScore = parsed.mediaType == .series && parsed.seasonNumber != nil && parsed.episodeNumber != nil ? 0.95 : 0.85
+            } else if identityBoundAliases.contains(candidateDisplay) || identityBoundAliases.contains(candidateOriginal) {
+                titleScore = 0.95
+            } else if aliases.contains(candidateDisplay) || aliases.contains(candidateOriginal) {
                 titleScore = 0.85
             } else if !ancestor.isEmpty && (candidateDisplay == ancestor || candidateOriginal == ancestor) {
                 titleScore = 0.82
@@ -50,6 +65,14 @@ enum MediaMatchScorer {
     }
 
     static func mayAutoConfirm(_ match: ScoredTMDBResult) -> Bool { match.confidence >= 0.95 }
+
+    /// Strict disposition policy for a ranked set: a strong result must also be
+    /// separated from the runner-up. A single strong result is unambiguous.
+    static func mayAutoConfirm(_ ranked: [ScoredTMDBResult], minimumMargin: Double = 0.05) -> Bool {
+        guard let first = ranked.first, first.confidence >= 0.95 else { return false }
+        guard let second = ranked.dropFirst().first else { return true }
+        return first.confidence - second.confidence >= minimumMargin
+    }
 
     private static func normalize(_ value: String) -> String {
         value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))

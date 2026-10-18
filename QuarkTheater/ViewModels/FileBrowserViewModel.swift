@@ -33,15 +33,23 @@ final class FileBrowserViewModel: ObservableObject {
         }
     }
 
-    func reload() async { await load(reset: true) }
+    func reload() async {
+        guard !isLoading else { return }
+        await load(reset: true)
+    }
     func search(_ query: String) async {
+        guard !isLoading else { return }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         searchQuery = trimmed.isEmpty ? nil : trimmed
         await load(reset: true)
     }
-    func clearSearch() async { searchQuery = nil; await load(reset: true) }
+    func clearSearch() async {
+        guard !isLoading else { return }
+        searchQuery = nil
+        await load(reset: true)
+    }
     func loadMore() async {
-        guard hasMore else { return }
+        guard hasMore, !isLoading else { return }
         await load(reset: false)
     }
 
@@ -64,6 +72,7 @@ final class FileBrowserViewModel: ObservableObject {
     }
 
     func switchToFolder(id: String, name: String) async {
+        guard !isLoading else { return }
         folders = [Folder(id: id, name: name)]
         if !accountID.isEmpty {
             BoundFolderStore.setActiveFolder(id: id, name: name, accountID: accountID)
@@ -84,7 +93,8 @@ final class FileBrowserViewModel: ObservableObject {
         defer { isLoading = false }
         let requestedPage = page + 1
         let currentFolder = folders.last ?? Folder(id: "0", name: "我的网盘")
-        Self.logger.info("📂 FileBrowser: 正在加载目录 [\(currentFolder.name, privacy: .public)] (ID: \(currentFolder.id, privacy: .public)), 第 \(requestedPage) 页...")
+        // Keep OSLog free of account-owned names and opaque folder identifiers.
+        Self.logger.info("📂 FileBrowser: loading page \(requestedPage, privacy: .public)")
         do {
             let result: CloudFilePage
             if let searchQuery {
@@ -108,9 +118,20 @@ final class FileBrowserViewModel: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
-            Self.logger.error("❌ FileBrowser: 加载目录失败: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("❌ FileBrowser: load failed (error code \(Self.safeErrorCode(error), privacy: .public))")
             errorMessage = userFacingError(error)
             diagnostics.recordError(error, context: "文件列表")
         }
+    }
+
+    private static func safeErrorCode(_ error: Error) -> Int {
+        if let quark = error as? QuarkError {
+            switch quark {
+            case .httpStatus(let code), .server(let code, _): return code
+            case .credentialStorage(let code): return Int(code)
+            default: return 0
+            }
+        }
+        return (error as NSError).code
     }
 }

@@ -26,4 +26,59 @@ final class FilenameParserTests: XCTestCase {
         XCTAssertEqual(parsed.seasonNumber, 1)
         XCTAssertEqual(parsed.episodeNumber, 2)
     }
+
+    func testBareEpisodeUsesNamedSeriesAndStrictSeasonFolder() {
+        let parsed = FilenameParser.parse(
+            "01.mp4",
+            pathComponents: ["影视", "权力的游戏", "S01"],
+            boundRootName: nil
+        )
+
+        XCTAssertEqual(parsed.title, "权力的游戏")
+        XCTAssertEqual(parsed.mediaType, .series)
+        XCTAssertEqual(parsed.seasonNumber, 1)
+        XCTAssertEqual(parsed.episodeNumber, 1)
+    }
+
+    func testNamedBoundRootSuppliesSeriesContext() {
+        let parsed = FilenameParser.parse(
+            "03.mkv",
+            pathComponents: ["S02"],
+            boundRootName: "大西洋帝国"
+        )
+
+        XCTAssertEqual(parsed.title, "大西洋帝国")
+        XCTAssertEqual(parsed.mediaType, .series)
+        XCTAssertEqual(parsed.seasonNumber, 2)
+        XCTAssertEqual(parsed.episodeNumber, 3)
+    }
+
+    func testBareNumberWithoutSeriesContextIsUnresolved() {
+        let parsed = FilenameParser.parse("09.mp4", pathComponents: ["0"], boundRootName: nil)
+
+        XCTAssertEqual(parsed.mediaType, .unknown)
+        XCTAssertEqual(parsed.unresolvedReason, .missingSeriesContext)
+        XCTAssertNotEqual(parsed.title, "09")
+    }
+
+    func testGenericFolderDoesNotBecomeSeriesTitle() {
+        let parsed = FilenameParser.parse("01.mp4", pathComponents: ["Extras"], boundRootName: nil)
+
+        XCTAssertEqual(parsed.mediaType, .unknown)
+        XCTAssertEqual(parsed.unresolvedReason, .missingSeriesContext)
+    }
+
+    func testEmbeddedS01InTitleIsNotASeasonFolder() {
+        let context = FilenameParser.extractShowAndSeason(fromPath: ["ShowS01Collection"])
+
+        XCTAssertEqual(context.show, "ShowS01Collection")
+        XCTAssertNil(context.season)
+    }
+
+    func testNearerSeriesFolderWinsOverBoundRootFallback() {
+        let parsed = FilenameParser.parse("01.mp4", pathComponents: ["剧集分类", "真正的剧名", "S01"], boundRootName: "合集根目录")
+        XCTAssertEqual(parsed.title, "真正的剧名")
+        XCTAssertEqual(parsed.seasonNumber, 1)
+        XCTAssertEqual(parsed.episodeNumber, 1)
+    }
 }

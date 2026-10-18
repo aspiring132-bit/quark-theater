@@ -5,6 +5,9 @@ import UIKit
 @MainActor
 struct LoginScreen: View {
     @ObservedObject var model: SessionViewModel
+    @FocusState private var focusedTarget: LoginFocusTarget?
+
+    private enum LoginFocusTarget: Hashable { case login, cancel, restore }
     var body: some View {
         HStack(alignment: .center, spacing: 70) {
             if let challenge = model.challenge, !model.isMock {
@@ -24,23 +27,36 @@ struct LoginScreen: View {
                 if model.isLoggingIn {
                     ProgressView("等待手机确认")
                     Button("取消登录") { model.cancelLogin() }
+                        .focused($focusedTarget, equals: .cancel)
                 } else {
                     HStack(spacing: 20) {
                         Button(model.isMock ? "进入 Mock 演示" : "生成登录二维码") {
                             if model.isMock { model.enterMockDemo() } else { model.beginLogin() }
                         }
+                        .focused($focusedTarget, equals: .login)
                         .disabled(model.isBusy || model.client == nil)
 
                         Button("恢复已保存会话") {
                             Task { await model.retryRestore() }
                         }
                         .buttonStyle(.bordered)
+                        .focused($focusedTarget, equals: .restore)
                         .disabled(model.isBusy || model.client == nil)
                     }
                 }
                 Text("不会要求你在源码中填写个人 Cookie。").font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading)
-        }.onDisappear { model.cancelLogin() }
+        }
+        .onChange(of: model.isLoggingIn) { _, loggingIn in
+            focusedTarget = loggingIn ? .cancel : .login
+        }
+        .onChange(of: model.isBusy) { _, busy in
+            if !busy, !model.isLoggingIn { focusedTarget = .login }
+        }
+        .onChange(of: focusedTarget) { _, target in
+            if target != nil { model.diagnostics.recordFocusTransition(.loginAction) }
+        }
+        .onDisappear { model.cancelLogin() }
     }
 }
 

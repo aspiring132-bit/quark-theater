@@ -1,4 +1,5 @@
 import AVKit
+import KSPlayer
 import SwiftUI
 
 @MainActor
@@ -11,11 +12,10 @@ struct PlayerScreen: View {
     @State private var selectedDrawerTab: DrawerTab = .episodes
     @State private var isSeeking = false
     @State private var seekDismissTask: Task<Void, Never>?
+    @State private var hintDismissTask: Task<Void, Never>?
+    private let diagnostics: Diagnostics
 
-    // Two-tier focus: which row is focused (tab bar vs content row)
-    @FocusState private var focusZone: FocusZone?
-
-    private enum FocusZone: Hashable { case tabBar, content }
+    @FocusState private var focusedTarget: PlayerFocusTarget?
 
     private enum DrawerTab: String, CaseIterable, Identifiable {
         case episodes = "选集列表"
@@ -27,6 +27,7 @@ struct PlayerScreen: View {
     init(client: QuarkClient, accountID: String, file: CloudFile,
          queue: [CloudFile] = [], automaticallyPlayNext: Bool = false,
          history: HistoryRepository, diagnostics: Diagnostics) {
+        self.diagnostics = diagnostics
         _coordinator = StateObject(wrappedValue: PlaybackCoordinator(
             client: client,
             accountID: accountID,
@@ -42,8 +43,11 @@ struct PlayerScreen: View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
-            // 1. Full-screen Video Player
-            if let player = coordinator.player {
+            // 1. Full-screen Video Player (KSPlayer FFmpeg or Native AVPlayer)
+            if let ksURL = coordinator.ksPlayerURL, let ksOptions = coordinator.ksPlayerOptions {
+                KSVideoPlayer(coordinator: coordinator.ksCoordinator, url: ksURL, options: ksOptions)
+                    .ignoresSafeArea()
+            } else if let player = coordinator.player {
                 VideoPlayer(player: player)
                     .ignoresSafeArea()
             } else if coordinator.isLoading {
@@ -77,8 +81,30 @@ struct PlayerScreen: View {
                 }
             }
 
+            if coordinator.activeEngine == .ksplayer, !coordinator.ksSubtitleParts.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(coordinator.ksSubtitleParts) { part in
+                        if let image = part.image {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: 900, maxHeight: 240)
+                        } else if let text = part.text {
+                            Text(AttributedString(text))
+                                .font(.title3)
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.center)
+                                .shadow(color: .black, radius: 2)
+                        }
+                    }
+                }
+                .padding(.horizontal, 80)
+                .padding(.bottom, 110)
+                .allowsHitTesting(false)
+            }
+
             // 2. Bottom Drawer Trigger Pill (auto fades after 3s)
-            if !showDrawer && coordinator.player != nil && showHintPill {
+            if !showDrawer && coordinator.hasActivePlayer && showHintPill {
                 Button {
                     openDrawer()
                 } label: {
@@ -97,6 +123,7 @@ struct PlayerScreen: View {
                     .background(.ultraThinMaterial, in: Capsule())
                 }
                 .buttonStyle(.borderless)
+                .focused($focusedTarget, equals: .drawerTrigger)
                 .padding(.bottom, 36)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
@@ -117,21 +144,26 @@ struct PlayerScreen: View {
             }
         }
         .onMoveCommand { direction in
-            if direction == .left || direction == .right {
-                triggerSeeking()
-            }
+            handleMoveCommand(direction)
         }
         .task {
             await coordinator.start()
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            withAnimation(.easeOut(duration: 0.6)) { showHintPill = false }
+            hintDismissTask?.cancel()
+            hintDismissTask = Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.6)) { showHintPill = false }
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { coordinator.saveProgress() }
         }
         .onDisappear { coordinator.stop() }
-        .onMoveCommand { direction in
-            handleMoveCommand(direction)
+        .onChange(of: focusedTarget) { _, target in
+            if let target { diagnostics.recordFocusTransition(FocusDiagnostics.target(for: target)) }
+        }
+        .onPlayPauseCommand {
+            coordinator.togglePlayPause()
         }
     }
 
@@ -141,41 +173,72 @@ struct PlayerScreen: View {
         case .down:
             if !showDrawer {
                 openDrawer()
-            } else if focusZone == .tabBar {
+            } else if isTabFocus {
                 // Move focus from tab bar down into content area
-                focusZone = .content
+                focusedTarget = defaultContentTarget
             }
         case .up:
             if showDrawer {
-                if focusZone == .content {
+                if !isTabFocus {
                     // Move focus back up to tab bar
-                    focusZone = .tabBar
+                    focusedTarget = .drawerTab(selectedDrawerTab.rawValue)
                 } else {
                     // Already on tab bar — close drawer
                     closeDrawer()
                 }
             }
+        case .left, .right:
+            if !showDrawer {
+                let seekDirection: PlayerSeekDirection = direction == .left ? .backward : .forward
+                coordinator.seek(direction: seekDirection, interval: PlayerSeekPreference.current)
+                triggerSeeking()
+            }
         default:
-            break // Left/Right handled natively by focused buttons in each row
+            break
+        }
+    }
+
+    private var isTabFocus: Bool {
+        guard let focusedTarget else { return true }
+        if case .drawerTab = focusedTarget { return true }
+        return focusedTarget == .closeDrawer || focusedTarget == .silentMarker
+    }
+
+    private var defaultContentTarget: PlayerFocusTarget? {
+        switch selectedDrawerTab {
+        case .episodes:
+            if coordinator.canPlayNext { return .nextEpisode }
+            return coordinator.playlistQueue.first.map { .episode($0.fileId) }
+        case .subtitles:
+            return .subtitle("off")
+        case .audio:
+            let count = coordinator.activeEngine == .ksplayer ? coordinator.ksAudioOptions.count : coordinator.audioOptions.count
+            return count > 0 ? .audio("0") : nil
         }
     }
 
     private func openDrawer() {
+        hintDismissTask?.cancel()
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             showDrawer = true
             showHintPill = false
         }
         // Give a brief moment for views to appear, then set focus
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            focusZone = .tabBar
+            focusedTarget = .drawerTab(selectedDrawerTab.rawValue)
         }
     }
 
     private func closeDrawer() {
+        hintDismissTask?.cancel()
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             showDrawer = false
+            showHintPill = true
         }
-        focusZone = nil
+        focusedTarget = nil
+        DispatchQueue.main.async {
+            if !showDrawer { focusedTarget = .drawerTrigger }
+        }
     }
 
     // MARK: - Drawer Panel
@@ -190,7 +253,7 @@ struct PlayerScreen: View {
                     Text(coordinator.currentPlayingFile.name)
                         .font(.title3.bold())
                         .lineLimit(1)
-                    Text("共 \(coordinator.playlistQueue.count) 集 · 字幕 \(coordinator.subtitleOptions.count) 轨 · 音频 \(coordinator.audioOptions.count) 轨")
+                    Text("共 \(coordinator.playlistQueue.count) 集 · 字幕 \(coordinator.subtitleTrackNames.count) 轨 · 音频 \(coordinator.audioTrackNames.count) 轨")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -211,7 +274,17 @@ struct PlayerScreen: View {
                             .padding(.vertical, 8)
                     }
                     .buttonStyle(.bordered)
-                    .focused($focusZone, equals: .tabBar)
+                    .focused($focusedTarget, equals: .closeDrawer)
+
+                    Button {
+                        coordinator.markSilent()
+                    } label: {
+                        Label("标记无声", systemImage: coordinator.lastSilentMarkerDate == nil ? "speaker.slash" : "checkmark.circle")
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.bordered)
+                    .focused($focusedTarget, equals: .silentMarker)
                 }
             }
             .padding(.horizontal, 24)
@@ -251,7 +324,7 @@ struct PlayerScreen: View {
             }
             // Move focus to content so the user can immediately navigate items
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                focusZone = .content
+                focusedTarget = defaultContentTarget
             }
         } label: {
             Text(tab.rawValue)
@@ -266,9 +339,7 @@ struct PlayerScreen: View {
                 )
         }
         .buttonStyle(.borderless)
-        // All tab buttons share the same FocusZone (.tabBar) — tvOS focus
-        // engine navigates horizontally between siblings in the same HStack.
-        .focused($focusZone, equals: .tabBar)
+        .focused($focusedTarget, equals: .drawerTab(tab.rawValue))
     }
 
     // MARK: - Episodes Content Row
@@ -299,7 +370,7 @@ struct PlayerScreen: View {
                         )
                     }
                     .buttonStyle(.borderless)
-                    .focused($focusZone, equals: .content)
+                    .focused($focusedTarget, equals: .nextEpisode)
                 }
 
                 ForEach(coordinator.playlistQueue) { file in
@@ -343,7 +414,7 @@ struct PlayerScreen: View {
                         )
                     }
                     .buttonStyle(.borderless)
-                    .focused($focusZone, equals: .content)
+                    .focused($focusedTarget, equals: .episode(file.fileId))
                 }
             }
             .padding(.horizontal, 24)
@@ -368,28 +439,28 @@ struct PlayerScreen: View {
                     )
                 }
                 .buttonStyle(.borderless)
-                .focused($focusZone, equals: .content)
+                .focused($focusedTarget, equals: .subtitle("off"))
 
-                if coordinator.subtitleOptions.isEmpty {
+                let names = coordinator.subtitleTrackNames
+                if names.isEmpty {
                     Text("未检测到内嵌字幕轨，支持外挂 SRT/ASS 格式。")
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 24)
                 } else {
-                    ForEach(coordinator.subtitleOptions.indices, id: \.self) { index in
+                    ForEach(names.indices, id: \.self) { index in
                         let isSelected = coordinator.selectedSubtitleIndex == index
-                        let option = coordinator.subtitleOptions[index]
                         Button {
                             coordinator.selectSubtitle(index)
                         } label: {
                             subtitleAudioLabel(
                                 icon: isSelected ? "checkmark.circle.fill" : "circle",
-                                title: option.displayName,
+                                title: names[index],
                                 subtitle: "字幕轨 #\(index + 1)",
                                 isSelected: isSelected
                             )
                         }
                         .buttonStyle(.borderless)
-                        .focused($focusZone, equals: .content)
+                        .focused($focusedTarget, equals: .subtitle(String(index)))
                     }
                 }
             }
@@ -403,26 +474,26 @@ struct PlayerScreen: View {
     private var audioView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 16) {
-                if coordinator.audioOptions.isEmpty {
+                let names = coordinator.audioTrackNames
+                if names.isEmpty {
                     Text("当前使用系统默认立体声音频流。")
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 24)
                 } else {
-                    ForEach(coordinator.audioOptions.indices, id: \.self) { index in
+                    ForEach(names.indices, id: \.self) { index in
                         let isSelected = coordinator.selectedAudioIndex == index
-                        let option = coordinator.audioOptions[index]
                         Button {
                             coordinator.selectAudio(index)
                         } label: {
                             subtitleAudioLabel(
                                 icon: isSelected ? "speaker.wave.3.fill" : "speaker.wave.1",
-                                title: option.displayName,
+                                title: names[index],
                                 subtitle: "音轨 #\(index + 1)",
                                 isSelected: isSelected
                             )
                         }
                         .buttonStyle(.borderless)
-                        .focused($focusZone, equals: .content)
+                        .focused($focusedTarget, equals: .audio(String(index)))
                     }
                 }
             }

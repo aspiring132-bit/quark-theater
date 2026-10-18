@@ -18,6 +18,16 @@ struct MediaScanDiff: Equatable {
     let removed: Int
 }
 
+struct LearnedAlias: Identifiable, Equatable {
+    let accountID: String
+    let mediaType: MediaType
+    let sourceTitle: String
+    let canonicalTitle: String
+    let tmdbID: Int
+    let updatedAt: Date
+    var id: String { "\(mediaType.rawValue):\(sourceTitle)" }
+}
+
 /// Stores only explicitly confirmed metadata, separated by account and cloud file.
 @MainActor
 final class MediaCatalogRepository {
@@ -47,6 +57,15 @@ final class MediaCatalogRepository {
         CREATE TABLE IF NOT EXISTS media_scan (
           account_id TEXT NOT NULL, file_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
           PRIMARY KEY(account_id, file_id));
+        CREATE TABLE IF NOT EXISTS media_learned_aliases (
+          account_id TEXT NOT NULL,
+          media_type TEXT NOT NULL,
+          source_title TEXT NOT NULL,
+          canonical_title TEXT NOT NULL,
+          tmdb_id INTEGER NOT NULL,
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL,
+          PRIMARY KEY(account_id, media_type, source_title));
         """
         guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else {
             let code = sqlite3_errcode(opened)
@@ -72,6 +91,88 @@ final class MediaCatalogRepository {
         _ = data.withUnsafeBytes { sqlite3_bind_blob(statement, 3, $0.baseAddress, Int32(data.count), transient) }
         let result = sqlite3_step(statement)
         guard result == SQLITE_DONE else { throw MediaCatalogError.database(result) }
+    }
+
+    /// Stores a learned alias only after an explicit user confirmation. The
+    /// exact normalized source title is scoped by account and media type.
+    func learnAlias(accountID: String, mediaType: MediaType, sourceTitle: String, canonicalTitle: String, tmdbID: Int) throws {
+        guard !accountID.isEmpty, mediaType != .unknown, tmdbID > 0 else { throw MediaCatalogError.invalidMatch }
+        let source = MediaAliasResolver.normalizeTitle(sourceTitle)
+        let canonical = canonicalTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty, !canonical.isEmpty else { throw MediaCatalogError.invalidMatch }
+        let now = Date().timeIntervalSince1970
+        var statement: OpaquePointer?
+        let sql = "INSERT INTO media_learned_aliases(account_id,media_type,source_title,canonical_title,tmdb_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,media_type,source_title) DO UPDATE SET canonical_title=excluded.canonical_title, tmdb_id=excluded.tmdb_id, updated_at=excluded.updated_at"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+        defer { sqlite3_finalize(statement) }
+        bind(accountID, statement, 1); bind(mediaType.rawValue, statement, 2); bind(source, statement, 3); bind(canonical, statement, 4)
+        sqlite3_bind_int(statement, 5, Int32(tmdbID)); sqlite3_bind_double(statement, 6, now); sqlite3_bind_double(statement, 7, now)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+    }
+
+    func learnedAliasVariants(accountID: String, mediaType: MediaType, sourceTitle: String) throws -> [String] {
+        try learnedAliasRecords(accountID: accountID, mediaType: mediaType, sourceTitle: sourceTitle).map(\.canonicalTitle)
+    }
+
+    /// Returns aliases with their confirmed TMDB identity intact. Callers must
+    /// use the ID when applying learned-alias confidence; a title alone is not
+    /// a sufficient identity because TMDB can have multiple records sharing it.
+    func learnedAliasRecords(accountID: String, mediaType: MediaType, sourceTitle: String) throws -> [LearnedAlias] {
+        let source = MediaAliasResolver.normalizeTitle(sourceTitle)
+        guard !source.isEmpty, mediaType != .unknown else { return [] }
+        var statement: OpaquePointer?
+        let sql = "SELECT source_title,canonical_title,tmdb_id,updated_at FROM media_learned_aliases WHERE account_id=? AND media_type=? AND source_title=?"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+        defer { sqlite3_finalize(statement) }
+        bind(accountID, statement, 1); bind(mediaType.rawValue, statement, 2); bind(source, statement, 3)
+        var records: [LearnedAlias] = []
+        while true {
+            let code = sqlite3_step(statement)
+            if code == SQLITE_DONE { return records }
+            guard code == SQLITE_ROW,
+                  let sourceValue = sqlite3_column_text(statement, 0),
+                  let canonicalValue = sqlite3_column_text(statement, 1) else { throw MediaCatalogError.corruptRecord }
+            records.append(LearnedAlias(accountID: accountID, mediaType: mediaType,
+                                        sourceTitle: String(cString: sourceValue),
+                                        canonicalTitle: String(cString: canonicalValue),
+                                        tmdbID: Int(sqlite3_column_int(statement, 2)),
+                                        updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))))
+        }
+    }
+
+    func removeLearnedAlias(accountID: String, mediaType: MediaType, sourceTitle: String) throws {
+        let source = MediaAliasResolver.normalizeTitle(sourceTitle)
+        guard !source.isEmpty else { return }
+        var statement: OpaquePointer?
+        let sql = "DELETE FROM media_learned_aliases WHERE account_id=? AND media_type=? AND source_title=?"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+        defer { sqlite3_finalize(statement) }
+        bind(accountID, statement, 1); bind(mediaType.rawValue, statement, 2); bind(source, statement, 3)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+    }
+
+    func learnedAliases(accountID: String) throws -> [LearnedAlias] {
+        var statement: OpaquePointer?
+        let sql = "SELECT media_type,source_title,canonical_title,tmdb_id,updated_at FROM media_learned_aliases WHERE account_id=? ORDER BY updated_at DESC"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw MediaCatalogError.database(sqlite3_errcode(database))
+        }
+        defer { sqlite3_finalize(statement) }
+        bind(accountID, statement, 1)
+        var result: [LearnedAlias] = []
+        while true {
+            let code = sqlite3_step(statement)
+            if code == SQLITE_DONE { return result }
+            guard code == SQLITE_ROW,
+                  let mediaTypeRaw = sqlite3_column_text(statement, 0),
+                  let source = sqlite3_column_text(statement, 1),
+                  let canonical = sqlite3_column_text(statement, 2) else { throw MediaCatalogError.corruptRecord }
+            guard let mediaType = MediaType(rawValue: String(cString: mediaTypeRaw)) else { continue }
+            result.append(LearnedAlias(accountID: accountID, mediaType: mediaType,
+                                       sourceTitle: String(cString: source), canonicalTitle: String(cString: canonical),
+                                       tmdbID: Int(sqlite3_column_int(statement, 3)),
+                                       updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 4))))
+        }
     }
 
     func confirmed(accountID: String) throws -> [MediaItem] {
