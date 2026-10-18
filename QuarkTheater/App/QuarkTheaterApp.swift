@@ -5,13 +5,11 @@ import SwiftUI
 struct QuarkTheaterApp: App {
     @StateObject private var model = SessionViewModel()
     private let history: HistoryRepository? = {
-        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
-        let url = caches.appendingPathComponent("QuarkTheater", isDirectory: true).appendingPathComponent("watch-history.sqlite")
+        guard let url = StoragePaths.watchHistoryDatabaseURL() else { return nil }
         return try? HistoryRepository(url: url)
     }()
     private let mediaCatalog: MediaCatalogRepository? = {
-        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
-        let url = caches.appendingPathComponent("QuarkTheater", isDirectory: true).appendingPathComponent("media-catalog.sqlite")
+        guard let url = StoragePaths.mediaCatalogDatabaseURL() else { return nil }
         return try? MediaCatalogRepository(url: url)
     }()
     @Environment(\.scenePhase) private var scenePhase

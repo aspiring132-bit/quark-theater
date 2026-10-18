@@ -238,7 +238,16 @@ struct MediaItemDetailScreen: View {
                 // MARK: - 3. Episodes Grid / Rail
                 VStack(alignment: .leading, spacing: 20) {
                     HStack {
-                        Text(item.mediaType == .series ? "第 \(selectedSeason) 季 · 剧集列表" : "播放源文件")
+                        let headerTitle: String = {
+                            if item.mediaType == .series {
+                                return "第 \(selectedSeason) 季 · 剧集列表"
+                            } else if currentSeasonEpisodes.count > 1 {
+                                return "可选播放版本 (\(currentSeasonEpisodes.count) 个版本)"
+                            } else {
+                                return "播放源文件"
+                            }
+                        }()
+                        Text(headerTitle)
                             .font(.title2.bold())
                         Spacer()
                         Text("共 \(currentSeasonEpisodes.count) 个视频")
@@ -309,13 +318,22 @@ struct MediaItemDetailScreen: View {
     private func episodeCard(_ metadata: MediaItem, file: CloudFile, parsed: ParsedMediaName) -> some View {
         let epNumber = parsed.episodeNumber ?? 1
         let progress = watchProgressByFileId[file.fileId] ?? 0
+        let cardTitle: String = {
+            if item.mediaType == .series {
+                return "第 \(epNumber) 集"
+            } else if currentSeasonEpisodes.count > 1 {
+                return movieVersionTag(filename: file.name)
+            } else {
+                return "正片"
+            }
+        }()
 
         Button {
             selectedFile = file
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text(item.mediaType == .series ? "第 \(epNumber) 集" : "正片")
+                    Text(cardTitle)
                         .font(.headline.bold())
                         .foregroundStyle(.cyan)
 
@@ -373,6 +391,27 @@ struct MediaItemDetailScreen: View {
         }
         .buttonStyle(.card)
         .focused($focusedEpisodeID, equals: file.fileId)
+    }
+
+    private func movieVersionTag(filename: String) -> String {
+        var tags: [String] = []
+        let lower = filename.lowercased()
+        if lower.contains("4k") || lower.contains("2160p") {
+            tags.append("4K")
+        } else if lower.contains("1080p") {
+            tags.append("1080P")
+        } else if lower.contains("720p") {
+            tags.append("720P")
+        }
+        if lower.contains("hdr") {
+            tags.append("HDR")
+        } else if lower.contains("sdr") {
+            tags.append("SDR")
+        }
+        if lower.contains("中字") || lower.contains("双语") || lower.contains("chs") {
+            tags.append("中字")
+        }
+        return tags.isEmpty ? "正片" : tags.joined(separator: " · ")
     }
 
     private func setFavorite(_ favorite: Bool) {

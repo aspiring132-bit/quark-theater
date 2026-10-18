@@ -90,7 +90,7 @@ struct RootView: View {
 
     // MARK: - Floating Dock Bar Pill
     private var floatingDockBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             ForEach(RootTab.allCases, id: \.self) { tab in
                 let isFocused = (focusedDockTab == tab)
                 let isSelected = (selectedTab == tab)
@@ -105,21 +105,20 @@ struct RootView: View {
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                    .padding(.horizontal, 22)
+                    .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                     .foregroundStyle(dockForeground(isFocused: isFocused, isSelected: isSelected))
                     .background(dockBackground(isFocused: isFocused, isSelected: isSelected), in: Capsule())
                     .overlay(
-                        Capsule().stroke(dockStroke(isFocused: isFocused, isSelected: isSelected), lineWidth: isFocused ? 2 : 1)
+                        Capsule().stroke(dockStroke(isFocused: isFocused, isSelected: isSelected), lineWidth: isFocused ? 2.5 : 1)
                     )
                 }
                 .buttonStyle(.plain)
                 .focused($focusedDockTab, equals: tab)
-                .scaleEffect(isFocused ? 1.08 : 1.0)
-                .animation(.easeOut(duration: 0.18), value: isFocused)
             }
         }
-        .padding(6)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(
             Capsule()
@@ -130,19 +129,19 @@ struct RootView: View {
 
     private func dockBackground(isFocused: Bool, isSelected: Bool) -> Color {
         if isFocused { return .white }
-        if isSelected { return Color.white.opacity(0.22) }
+        if isSelected { return Color.cyan.opacity(0.35) }
         return .clear
     }
 
     private func dockForeground(isFocused: Bool, isSelected: Bool) -> Color {
         if isFocused { return .black }
         if isSelected { return .white }
-        return Color.white.opacity(0.7)
+        return Color.white.opacity(0.8)
     }
 
     private func dockStroke(isFocused: Bool, isSelected: Bool) -> Color {
         if isFocused { return .white }
-        if isSelected { return Color.white.opacity(0.3) }
+        if isSelected { return Color.cyan.opacity(0.6) }
         return .clear
     }
 

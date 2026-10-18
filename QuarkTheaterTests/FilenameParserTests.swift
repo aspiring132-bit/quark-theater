@@ -81,4 +81,33 @@ final class FilenameParserTests: XCTestCase {
         XCTAssertEqual(parsed.seasonNumber, 1)
         XCTAssertEqual(parsed.episodeNumber, 1)
     }
+
+    func testHighCastleSeason4FolderAndBareEpisodes() {
+        let parsed = FilenameParser.parse(
+            "01.mp4",
+            pathComponents: ["来自：分享", "G 高堡奇人S01~S04", "Season 04"],
+            boundRootName: nil
+        )
+        XCTAssertEqual(parsed.title, "高堡奇人")
+        XCTAssertEqual(parsed.mediaType, .series)
+        XCTAssertEqual(parsed.seasonNumber, 4)
+        XCTAssertEqual(parsed.episodeNumber, 1)
+    }
+
+    func testChineseNumeralSeasonExtraction() {
+        let parsed = FilenameParser.parse(
+            "10.mp4",
+            pathComponents: ["高堡奇人", "第四季"],
+            boundRootName: nil
+        )
+        XCTAssertEqual(parsed.title, "高堡奇人")
+        XCTAssertEqual(parsed.mediaType, .series)
+        XCTAssertEqual(parsed.seasonNumber, 4)
+        XCTAssertEqual(parsed.episodeNumber, 10)
+    }
+
+    func testProjectHailMaryTitleAndObfuscationBypass() {
+        let title = FilenameParser.folderTitle("挽救#J划 Project Hail Mary (2026)(1)")
+        XCTAssertEqual(title, "挽救计划 Project Hail Mary")
+    }
 }

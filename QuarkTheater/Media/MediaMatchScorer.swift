@@ -64,14 +64,13 @@ enum MediaMatchScorer {
         }
     }
 
-    static func mayAutoConfirm(_ match: ScoredTMDBResult) -> Bool { match.confidence >= 0.95 }
+    static func mayAutoConfirm(_ match: ScoredTMDBResult) -> Bool {
+        match.confidence >= MatchDecisionPolicy.autoConfirmThreshold
+    }
 
-    /// Strict disposition policy for a ranked set: a strong result must also be
-    /// separated from the runner-up. A single strong result is unambiguous.
-    static func mayAutoConfirm(_ ranked: [ScoredTMDBResult], minimumMargin: Double = 0.05) -> Bool {
-        guard let first = ranked.first, first.confidence >= 0.95 else { return false }
-        guard let second = ranked.dropFirst().first else { return true }
-        return first.confidence - second.confidence >= minimumMargin
+    /// Strict disposition policy for a ranked set: delegates to centralized MatchDecisionPolicy.
+    static func mayAutoConfirm(_ ranked: [ScoredTMDBResult], minimumMargin: Double = MatchDecisionPolicy.minimumMargin) -> Bool {
+        MatchDecisionPolicy.evaluate(ranked).isAutoConfirmed
     }
 
     private static func normalize(_ value: String) -> String {

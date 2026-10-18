@@ -714,25 +714,27 @@ struct MediaLibraryScreen: View {
         }
 
         do {
-            let boundIDs = BoundFolderStore.boundFolderIDs(accountID: accountID)
+            let boundIDs = Array(BoundFolderStore.boundFolderIDs(accountID: accountID))
             let names = BoundFolderStore.boundFolderNames(accountID: accountID)
-            let roots = boundIDs.sorted().map { MediaScanRoot(id: $0, name: names[$0]) }
-            candidates = try await MediaLibraryScanner().scan(client: client, roots: roots) { count in
-                if !silent {
-                    statusProgress = "已扫描 \(count) 个文件…"
-                }
+            let syncService = MediaLibrarySyncService(
+                client: client,
+                accountID: accountID,
+                catalog: catalog,
+                tokenStore: tokenStore,
+                diagnostics: diagnostics
+            )
+            let (scanned, result) = try await syncService.sync(
+                boundFolderIDs: boundIDs,
+                boundFolderNames: names,
+                scraperLanguage: scraperLanguage
+            ) { progress in
+                if !silent { statusProgress = progress }
             }
-
-            let changes = try catalog.reconcileScan(accountID: accountID, candidates: candidates)
-            reloadConfirmed()
-
-            // Run automatic TMDB scraper pass for unconfirmed items
-            await autoMatchUnmatched(silent: silent)
-
+            candidates = scanned
             reloadConfirmed()
             if !silent {
-                message = "扫描与刮削完成：新增 \(changes.added)，变更 \(changes.changed)，已匹配海报 \(confirmed.count) 部影视。"
-                diagnostics.record("媒体扫描完成：\(candidates.count) 个视频；新增 \(changes.added)、变更 \(changes.changed)、已匹配 \(confirmed.count)")
+                message = "扫描与刮削完成：新增 \(result.addedCount)，变更 \(result.changedCount)，已匹配海报 \(confirmed.count) 部影视。"
+                diagnostics.record("媒体扫描完成：\(candidates.count) 个视频；新增 \(result.addedCount)、变更 \(result.changedCount)、已匹配 \(confirmed.count)")
             }
         } catch is CancellationError {
             if !silent { message = "扫描已取消。" }

@@ -169,31 +169,32 @@ struct PlayerScreen: View {
 
     // MARK: - Remote Navigation Handler
     private func handleMoveCommand(_ direction: MoveCommandDirection) {
-        switch direction {
-        case .down:
-            if !showDrawer {
-                openDrawer()
-            } else if isTabFocus {
-                // Move focus from tab bar down into content area
-                focusedTarget = defaultContentTarget
+        let state = PlayerInputState(
+            isDrawerOpen: showDrawer,
+            selectedDrawerTab: selectedDrawerTab.rawValue,
+            focusedTarget: focusedTarget,
+            canPlayNext: coordinator.canPlayNext,
+            currentPlaybackTime: 0,
+            duration: 0
+        )
+        let action = PlayerInputReducer.reduce(state: state, direction: direction, seekInterval: PlayerSeekPreference.current)
+        switch action {
+        case .openDrawer:
+            openDrawer()
+        case .closeDrawer:
+            closeDrawer()
+        case .focusTarget(let target):
+            if case .episode = target {
+                focusedTarget = coordinator.playlistQueue.first.map { .episode($0.fileId) } ?? target
+            } else {
+                focusedTarget = target
             }
-        case .up:
-            if showDrawer {
-                if !isTabFocus {
-                    // Move focus back up to tab bar
-                    focusedTarget = .drawerTab(selectedDrawerTab.rawValue)
-                } else {
-                    // Already on tab bar — close drawer
-                    closeDrawer()
-                }
-            }
-        case .left, .right:
-            if !showDrawer {
-                let seekDirection: PlayerSeekDirection = direction == .left ? .backward : .forward
-                coordinator.seek(direction: seekDirection, interval: PlayerSeekPreference.current)
-                triggerSeeking()
-            }
-        default:
+        case .seek(let dir, let interval):
+            coordinator.seek(direction: dir, interval: interval)
+            triggerSeeking()
+        case .togglePlayPause:
+            coordinator.togglePlayPause()
+        case .none:
             break
         }
     }

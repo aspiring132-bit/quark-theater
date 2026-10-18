@@ -10,7 +10,10 @@ enum MediaAliasResolver {
         ("使女", "使女的故事"),
         ("大西洋", "大西洋帝国"),
         ("绝命", "绝命毒师"),
-        ("权游", "权力的游戏")
+        ("权游", "权力的游戏"),
+        ("挽救#j划", "挽救计划"),
+        ("挽救#J划", "挽救计划"),
+        ("挽救计划", "Project Hail Mary")
     ]
 
     static func normalizeTitle(_ value: String) -> String {
