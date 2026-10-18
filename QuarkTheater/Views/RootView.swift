@@ -90,7 +90,7 @@ struct RootView: View {
 
     // MARK: - Floating Dock Bar Pill
     private var floatingDockBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 24) {
             ForEach(RootTab.allCases, id: \.self) { tab in
                 let isFocused = (focusedDockTab == tab)
                 let isSelected = (selectedTab == tab)
@@ -98,27 +98,29 @@ struct RootView: View {
                 Button {
                     selectedTab = tab
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 10) {
                         Image(systemName: tab.icon)
                         Text(tab.title)
                             .font(.headline.weight(isFocused || isSelected ? .bold : .medium))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 8)
                     .foregroundStyle(dockForeground(isFocused: isFocused, isSelected: isSelected))
                     .background(dockBackground(isFocused: isFocused, isSelected: isSelected), in: Capsule())
                     .overlay(
                         Capsule().stroke(dockStroke(isFocused: isFocused, isSelected: isSelected), lineWidth: isFocused ? 2.5 : 1)
                     )
+                    .scaleEffect(isFocused ? 1.05 : 1.0)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isFocused)
                 }
                 .buttonStyle(.plain)
                 .focused($focusedDockTab, equals: tab)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(
             Capsule()
@@ -430,11 +432,13 @@ private struct SettingsScreen: View {
     @State private var confirmClearMetadata = false
     @State private var diagnosticCategory: DiagnosticCategory?
     @State private var diagnosticsMessage: String?
+    @State private var isExportingLogs = false
+    @State private var exportAlertMessage: String?
+    @State private var showExportAlert = false
     @State private var learnedAliases: [LearnedAlias] = []
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
     @AppStorage("scraperLanguage") private var scraperLanguage = "zh-CN"
     @AppStorage(PlayerSeekPreference.key) private var seekInterval = PlayerSeekPreference.defaultInterval
-    @AppStorage("playbackEngine") private var playbackEngine = "ksplayer"
 
     var body: some View {
         ScrollView {
@@ -520,16 +524,6 @@ private struct SettingsScreen: View {
                 }
 
                 Text("播放偏好").font(.title2.bold())
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("解码播放引擎").font(.headline)
-                    Picker("播放引擎", selection: $playbackEngine) {
-                        Text("KSPlayer (FFmpeg 强解 · 突破防盗链 / MKV / 多音轨)").tag("ksplayer")
-                        Text("系统原生 (AVPlayer)").tag("avplayer")
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 950)
-                }
-
                 Toggle("剧集自动连播下一集", isOn: $autoPlayNextEpisode)
                     .frame(maxWidth: 800)
                 Picker("跳过时长", selection: $seekInterval) {
@@ -558,40 +552,48 @@ private struct SettingsScreen: View {
                     }
                 }
 
-                Text("数据维护与缓存管理").font(.title2.bold())
-                HStack(spacing: 20) {
-                    Button("清理全部观看记录", role: .destructive) { confirmClearHistory = true }
-                        .buttonStyle(.bordered)
+                // 数据维护与缓存管理 (Focus Section)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("数据维护与缓存管理").font(.title2.bold())
+                    HStack(spacing: 20) {
+                        Button("清理全部观看记录", role: .destructive) { confirmClearHistory = true }
+                            .buttonStyle(.bordered)
 
-                    Button("清空影视匹配缓存并重新刮削", role: .destructive) { confirmClearMetadata = true }
-                        .buttonStyle(.bordered)
+                        Button("清空影视匹配缓存并重新刮削", role: .destructive) { confirmClearMetadata = true }
+                            .buttonStyle(.bordered)
 
-                    Button("退出当前账号", role: .destructive) { confirmLogout = true }
-                        .buttonStyle(.bordered)
+                        Button("退出当前账号", role: .destructive) { confirmLogout = true }
+                            .buttonStyle(.bordered)
+                    }
                 }
+                .focusSection()
 
                 if let settingsMessage {
                     Text(settingsMessage).foregroundStyle(.cyan).font(.callout)
                 }
 
-                // Integrated Diagnostics Section
-                Text("诊断与日志记录").font(.title2.bold())
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("最近运行事件（不记录 Cookie 与令牌）")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Picker("分类", selection: $diagnosticCategory) {
-                            Text("全部").tag(DiagnosticCategory?.none)
-                            ForEach(DiagnosticCategory.allCases, id: \.self) { category in
-                                Text(category.rawValue).tag(Optional(category))
+                // Integrated Diagnostics Section (Focus Section)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("诊断与日志记录").font(.title2.bold())
+                    Text("最近运行事件（不记录 Cookie 与令牌）。若遇到播放异常，可一键打包并发送给开发者维护。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    // Unified Left-Aligned Action Bar (Guarantees downward navigation from Data Maintenance)
+                    HStack(spacing: 20) {
+                        Button {
+                            exportDiagnostics()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "envelope.badge")
+                                Text(isExportingLogs ? "正在打包并发送…" : "导出日志并发送至维护邮箱")
                             }
                         }
-                        .pickerStyle(.menu)
-                        Button("导出") { exportDiagnostics() }
-                            .buttonStyle(.bordered)
-                        Button("清空日志") {
+                        .buttonStyle(.borderedProminent)
+                        .tint(.cyan)
+                        .disabled(isExportingLogs)
+
+                        Button("清空运行日志") {
                             diagnosticsMessage = nil
                             Task {
                                 switch await model.diagnostics.clear().value {
@@ -602,38 +604,52 @@ private struct SettingsScreen: View {
                                 }
                             }
                         }
-                            .buttonStyle(.bordered)
+                        .buttonStyle(.bordered)
+
+                        Picker("分类筛选", selection: $diagnosticCategory) {
+                            Text("全部类别").tag(DiagnosticCategory?.none)
+                            ForEach(DiagnosticCategory.allCases, id: \.self) { category in
+                                Text(category.rawValue).tag(Optional(category))
+                            }
+                        }
+                        .pickerStyle(.menu)
                     }
-                    if visibleDiagnosticRecords.isEmpty {
-                        Text("暂无符合当前筛选条件的诊断记录。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        ForEach(visibleDiagnosticRecords) { record in
-                            HStack(alignment: .top, spacing: 16) {
-                                Text(record.date, style: .time).monospacedDigit().font(.caption2).foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("[\(record.category.rawValue)] \(record.event.rawValue)").font(.caption.bold())
-                                    Text(diagnosticSummary(record)).font(.caption).foregroundStyle(.secondary)
-                                }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        if visibleDiagnosticRecords.isEmpty {
+                            Text("暂无符合当前筛选条件的诊断记录。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            ForEach(visibleDiagnosticRecords) { record in
+                                HStack(alignment: .top, spacing: 16) {
+                                    Text(record.date, style: .time).monospacedDigit().font(.caption2).foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("[\(record.category.rawValue)] \(record.event.rawValue)").font(.caption.bold())
+                                        Text(diagnosticSummary(record)).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
                         }
                     }
+                    .padding(20)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+
                     if let failure = model.diagnostics.storageFailure {
                         Text("日志存储失败（\(failure.operation.rawValue)，错误码 \(failure.code)）")
                             .foregroundStyle(.orange)
                     }
                     if let diagnosticsMessage { Text(diagnosticsMessage).foregroundStyle(.cyan) }
                 }
-                .padding(20)
-                .background(Color.white.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .focusSection()
             }
             .frame(maxWidth: 1500, alignment: .leading)
             .padding(60)
         }
+        .focusSection()
         .confirmationDialog("退出当前夸克账号？", isPresented: $confirmLogout, titleVisibility: .visible) {
             Button("退出登录", role: .destructive) {
                 onBackToCinema()
@@ -662,6 +678,11 @@ private struct SettingsScreen: View {
                 FolderSelectionScreen(client: client, accountID: account.accountId, diagnostics: model.diagnostics, isPresented: $showFolderSelection) {}
             }
         }
+        .alert("系统诊断报告", isPresented: $showExportAlert, actions: {
+            Button("好的", role: .cancel) {}
+        }, message: {
+            Text(exportAlertMessage ?? "")
+        })
         .task {
             tmdbConfigured = (try? tmdbStore.load()) != nil
             if seekInterval != 10 && seekInterval != 15 { seekInterval = PlayerSeekPreference.defaultInterval }
@@ -681,10 +702,22 @@ private struct SettingsScreen: View {
     }
 
     private func exportDiagnostics() {
+        isExportingLogs = true
         Task {
-            switch await model.diagnostics.export() {
-            case .success(let url): diagnosticsMessage = "已导出：\(url.lastPathComponent)（\(url.deletingLastPathComponent().path)）"
-            case .failure(let failure): diagnosticsMessage = "导出失败（错误码 \(failure.code)）"
+            let result = await DiagnosticMailDispatcher.dispatchPackage(
+                diagnostics: model.diagnostics,
+                accountName: model.account?.displayName
+            )
+            isExportingLogs = false
+            switch result {
+            case .success(let url):
+                diagnosticsMessage = "已打包存档：\(url.lastPathComponent)"
+                exportAlertMessage = "系统日志与设备信息已成功打包，并已发送至开发者维护邮箱：\n\(DiagnosticMailDispatcher.recipientEmail)"
+                showExportAlert = true
+            case .failure(let error):
+                diagnosticsMessage = "打包失败：\(error.localizedDescription)"
+                exportAlertMessage = "打包日志失败：\(error.localizedDescription)"
+                showExportAlert = true
             }
         }
     }

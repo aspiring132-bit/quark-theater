@@ -35,10 +35,12 @@ struct TMDBMatchScreen: View {
         if let candidate, candidate.file.fileId == file.fileId {
             return candidate.parsedName
         }
+        let detectedSeason = candidate?.parsedName.seasonNumber ?? existingItem?.seasonNumber
+        let detectedShow = candidate?.parsedName.title ?? existingItem?.title
         return FilenameParser.parse(
             file.name,
-            detectedShowTitle: existingItem?.title ?? candidate?.parsedName.title,
-            detectedSeasonNumber: existingItem?.seasonNumber ?? candidate?.parsedName.seasonNumber
+            detectedShowTitle: detectedShow,
+            detectedSeasonNumber: detectedSeason
         )
     }
 
@@ -156,16 +158,8 @@ struct TMDBMatchScreen: View {
                                             .font(.title2)
                                     }
                                 }
-                                .padding(16)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(isSelected ? Color.cyan.opacity(0.15) : Color.white.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(isSelected ? Color.cyan : Color.white.opacity(0.1), lineWidth: isSelected ? 2 : 1)
-                                )
                             }
-                            .buttonStyle(.borderless)
+                            .buttonStyle(CandidateCardButtonStyle(isSelected: isSelected))
                             .focused($focusedTarget, equals: .result(match.result.id))
                         }
                     }
@@ -203,9 +197,13 @@ struct TMDBMatchScreen: View {
         .background(Color.black.opacity(0.95).ignoresSafeArea())
         .onChange(of: focusedTarget) { _, target in
             switch target {
-            case .search: diagnostics.recordFocusTransition(.tmdbSearch)
-            case .result: diagnostics.recordFocusTransition(.tmdbResult)
-            default: break
+            case .search:
+                diagnostics.recordFocusTransition(.tmdbSearch)
+            case .result(let id):
+                selectedID = id
+                diagnostics.recordFocusTransition(.tmdbResult)
+            default:
+                break
             }
         }
         .task { await search() }
@@ -312,6 +310,93 @@ struct TMDBMatchScreen: View {
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct CandidateCardButtonStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        CandidateCardBody(configuration: configuration, isSelected: isSelected)
+    }
+
+    private struct CandidateCardBody: View {
+        let configuration: Configuration
+        let isSelected: Bool
+        @Environment(\.isFocused) private var isFocused
+
+        private var backgroundColor: Color {
+            if isFocused {
+                return Color.white.opacity(0.18)
+            } else if isSelected {
+                return Color.cyan.opacity(0.15)
+            } else {
+                return Color.white.opacity(0.05)
+            }
+        }
+
+        private var strokeColor: Color {
+            if isFocused {
+                return Color.white
+            } else if isSelected {
+                return Color.cyan
+            } else {
+                return Color.white.opacity(0.1)
+            }
+        }
+
+        private var strokeLineWidth: CGFloat {
+            if isFocused {
+                return 3
+            } else if isSelected {
+                return 2
+            } else {
+                return 1
+            }
+        }
+
+        private var scale: CGFloat {
+            if isFocused {
+                return 1.04
+            } else if configuration.isPressed {
+                return 0.98
+            } else {
+                return 1.0
+            }
+        }
+
+        private var shadowColor: Color {
+            if isFocused {
+                return Color.cyan.opacity(0.55)
+            } else if isSelected {
+                return Color.cyan.opacity(0.2)
+            } else {
+                return .clear
+            }
+        }
+
+        var body: some View {
+            configuration.label
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(backgroundColor)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(strokeColor, lineWidth: strokeLineWidth)
+                )
+                .scaleEffect(scale)
+                .shadow(
+                    color: shadowColor,
+                    radius: isFocused ? 18 : 6,
+                    x: 0,
+                    y: isFocused ? 8 : 2
+                )
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isFocused)
+                .animation(.easeInOut(duration: 0.2), value: isSelected)
         }
     }
 }

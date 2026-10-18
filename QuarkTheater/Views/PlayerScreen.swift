@@ -43,13 +43,11 @@ struct PlayerScreen: View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
 
-            // 1. Full-screen Video Player (KSPlayer FFmpeg or Native AVPlayer)
+            // 1. Full-screen Video Player (KSPlayer FFmpeg Sole Engine)
             if let ksURL = coordinator.ksPlayerURL, let ksOptions = coordinator.ksPlayerOptions {
                 KSVideoPlayer(coordinator: coordinator.ksCoordinator, url: ksURL, options: ksOptions)
                     .ignoresSafeArea()
-            } else if let player = coordinator.player {
-                VideoPlayer(player: player)
-                    .ignoresSafeArea()
+                    .allowsHitTesting(!showDrawer)
             } else if coordinator.isLoading {
                 VStack(spacing: 20) {
                     ProgressView()
@@ -81,7 +79,7 @@ struct PlayerScreen: View {
                 }
             }
 
-            if coordinator.activeEngine == .ksplayer, !coordinator.ksSubtitleParts.isEmpty {
+            if !coordinator.ksSubtitleParts.isEmpty {
                 VStack(spacing: 4) {
                     ForEach(coordinator.ksSubtitleParts) { part in
                         if let image = part.image {
@@ -165,6 +163,13 @@ struct PlayerScreen: View {
         .onPlayPauseCommand {
             coordinator.togglePlayPause()
         }
+        .onExitCommand {
+            if showDrawer {
+                closeDrawer()
+            } else {
+                dismiss()
+            }
+        }
     }
 
     // MARK: - Remote Navigation Handler
@@ -213,7 +218,7 @@ struct PlayerScreen: View {
         case .subtitles:
             return .subtitle("off")
         case .audio:
-            let count = coordinator.activeEngine == .ksplayer ? coordinator.ksAudioOptions.count : coordinator.audioOptions.count
+            let count = coordinator.ksAudioOptions.count
             return count > 0 ? .audio("0") : nil
         }
     }
@@ -247,9 +252,7 @@ struct PlayerScreen: View {
     private var drawerPanel: some View {
         VStack(spacing: 0) {
             // ── Tab Bar Row ─────────────────────────────────────────────
-            // Each tab is an individually focusable Button so that L/R
-            // on the remote cycles through 选集列表 / 字幕 / 音轨 / 收起.
-            HStack(alignment: .center, spacing: 16) {
+            HStack(alignment: .center, spacing: 20) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(coordinator.currentPlayingFile.name)
                         .font(.title3.bold())
@@ -262,33 +265,35 @@ struct PlayerScreen: View {
                 Spacer()
 
                 // Tab selector buttons — focusable individually
-                HStack(spacing: 8) {
+                HStack(spacing: 12) {
                     ForEach(DrawerTab.allCases) { tab in
                         tabButton(tab)
                     }
-                    // Close / collapse button in same row
-                    Button {
-                        closeDrawer()
-                    } label: {
-                        Label("收起", systemImage: "chevron.down.circle.fill")
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.bordered)
-                    .focused($focusedTarget, equals: .closeDrawer)
 
                     Button {
                         coordinator.markSilent()
                     } label: {
                         Label("标记无声", systemImage: coordinator.lastSilentMarkerDate == nil ? "speaker.slash" : "checkmark.circle")
+                            .fixedSize()
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                     }
                     .buttonStyle(.bordered)
                     .focused($focusedTarget, equals: .silentMarker)
+
+                    Button {
+                        closeDrawer()
+                    } label: {
+                        Label("收起抽屉", systemImage: "chevron.down.circle.fill")
+                            .fixedSize()
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .focused($focusedTarget, equals: .closeDrawer)
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 28)
             .padding(.vertical, 20)
 
             Divider()

@@ -120,6 +120,7 @@ struct TMDBService {
             if colonStripped != parsed.title { rawCandidates.append(colonStripped) }
             let numStripped = trailingNumberStrip(colonStripped)
             if numStripped != colonStripped && !numStripped.isEmpty { rawCandidates.append(numStripped) }
+            rawCandidates.append(contentsOf: splitBilingualTitle(parsed.title))
         }
 
         // Parent / ancestor folder titles (e.g. "G 高堡奇人S01~S04").
@@ -128,6 +129,7 @@ struct TMDBService {
                 if let ft = FilenameParser.folderTitle(folder) {
                     rawCandidates.append(ft)
                     rawCandidates.append(contentsOf: MediaAliasResolver.variants(for: ft))
+                    rawCandidates.append(contentsOf: splitBilingualTitle(ft))
                 }
             }
         }
@@ -289,5 +291,19 @@ struct TMDBService {
     private func trailingNumberStrip(_ s: String) -> String {
         s.replacingOccurrences(of: #"\s*[0-9０-９]+$"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func splitBilingualTitle(_ s: String) -> [String] {
+        var variants: [String] = []
+        let chinese = s.replacingOccurrences(of: #"[^\u4e00-\u9fa50-9\s]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let latin = s.replacingOccurrences(of: #"[\u4e00-\u9fa5]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+
+        if chinese.count >= 2 && chinese != s { variants.append(chinese) }
+        if latin.count >= 2 && latin != s { variants.append(latin) }
+        return variants
     }
 }

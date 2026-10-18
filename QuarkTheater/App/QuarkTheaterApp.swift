@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 @main
@@ -13,6 +14,12 @@ struct QuarkTheaterApp: App {
         return try? MediaCatalogRepository(url: url)
     }()
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio)
+        try? session.setActive(true)
+    }
 
     var body: some Scene {
         WindowGroup {

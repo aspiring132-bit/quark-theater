@@ -38,6 +38,7 @@ enum FilenameParser {
     private static let yearPattern = #"(?:\(|\b)((?:19|20)\d{2})(?:\)|\b)"#
     private static let releaseTail = #"(?i)[ ._-]+(?:2160p|1080p|720p|480p|4k|8k|bluray|blu.?ray|web.?dl|webrip|hdtv|proper|remux|x26[45]|h\.?26[45]|hevc|avc|aac|dts).*$"#
     private static let strictSeasonPattern = #"(?i)^(?:s(?:eason)?\s*0?([0-9]{1,2})|第\s*([0-9]{1,2}|[一二三四五六七八九十]+)\s*季)$"#
+    private static let embeddedSeasonPattern = #"(?i)(?:[ ._-]|^)(?:s(?:eason)?\s*0?([0-9]{1,2})|第\s*([0-9]{1,2}|[一二三四五六七八九十]+)\s*季)(?:[ ._-]|$)"#
     private static let genericFolders: Set<String> = [
         "extras", "specials", "featurettes", "trailers", "extra", "special",
         "影视", "电影", "电视剧", "tv", "movies", "shows", "series", "0"
@@ -151,9 +152,17 @@ enum FilenameParser {
                 continue
             }
 
-            // Only an entire component can be a season marker. A title containing S01 is not one.
-            if season == nil {
+            // Only single seasons should match. Ranges like S01~S04 or S01-S04 are multi-season containers.
+            if season == nil && !comp.contains("~") && !comp.contains("-S") && !comp.contains("-s") {
                 if let m = firstMatch(strictSeasonPattern, in: comp) {
+                    let g1 = capture(m, 1, comp)
+                    let g2 = capture(m, 2, comp)
+                    if !g1.isEmpty, let num = Int(g1) {
+                        season = num
+                    } else if !g2.isEmpty, let num = parseChineseSeasonNumber(g2) {
+                        season = num
+                    }
+                } else if let m = firstMatch(embeddedSeasonPattern, in: comp) {
                     let g1 = capture(m, 1, comp)
                     let g2 = capture(m, 2, comp)
                     if !g1.isEmpty, let num = Int(g1) {
@@ -222,6 +231,8 @@ enum FilenameParser {
         s = s.replacingOccurrences(of: #"\s*第\s*(?:\d+|[一二三四五六七八九十]+)\s*季.*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\s*全\s*(?:\d+|[一二三四五六七八九十]+)\s*[季部集].*$"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"(?i)\s*Season\s*(?:\d+|[一二三四五六七八九十]+).*$"#, with: "", options: .regularExpression)
+        // Strip parentheses year e.g. "(2026)", "（2024）"
+        s = s.replacingOccurrences(of: #"\s*[\(（]\s*(?:19|20)\d{2}\s*[\)）]"#, with: "", options: .regularExpression)
         // Strip trailing episode counts "(1)", "(2)", "(全23集)"
         s = s.replacingOccurrences(of: #"\s*[\(（]\s*\d+\s*[\)）]$"#, with: "", options: .regularExpression)
         // Strip resolution & encoding tags
