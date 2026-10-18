@@ -322,8 +322,10 @@ final class PlaybackCoordinator: ObservableObject {
             customHeaders["Cookie"] = cookieHeader
         }
 
-        // 统一收敛为 KSPlayer 单一引擎驱动
-        KSOptions.firstPlayerType = KSMEPlayer.self
+        // KSPlayer 引擎配置：首选原生硬件 KSAVPlayer，遇复杂容器/编码自动无缝回落 KSMEPlayer (FFmpeg)
+        KSOptions.firstPlayerType = KSAVPlayer.self
+        KSOptions.secondPlayerType = KSMEPlayer.self
+        KSOptions.isSecondOpen = true
         // 配置音频渲染核心为 AudioRendererPlayer (AVSampleBufferAudioRenderer)
         // 解决 5.1/7.1 杜比音效在双声道扬声器上引发的 AVAudioEngine 崩溃无声，并原生支持空间音频与全景声输出
         KSOptions.audioPlayerType = AudioRendererPlayer.self
@@ -331,8 +333,8 @@ final class PlaybackCoordinator: ObservableObject {
         let options = KSOptions()
         options.appendHeader(Self.headersExcludingCookie(customHeaders))
         options.setCookie(applicableCookies)
-        options.preferredForwardBufferDuration = 60.0
-        options.audioFilters = ["aresample=async=1"]
+        options.preferredForwardBufferDuration = 3.0
+        options.maxBufferDuration = 60.0
 
         detachObservers()
 
