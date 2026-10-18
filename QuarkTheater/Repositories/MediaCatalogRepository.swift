@@ -47,6 +47,8 @@ final class MediaCatalogRepository {
             throw MediaCatalogError.database(result)
         }
         database = opened
+        // 应用被强杀时可能残留 WAL/表锁；给建表语句 1s 锁等待，避免启动即初始化失败
+        _ = sqlite3_busy_timeout(opened, 1000)
         let schema = """
         CREATE TABLE IF NOT EXISTS media_catalog (
           account_id TEXT NOT NULL, file_id TEXT NOT NULL, payload BLOB NOT NULL,

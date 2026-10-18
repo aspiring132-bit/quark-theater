@@ -5,8 +5,13 @@ struct RootView: View {
     @ObservedObject var model: SessionViewModel
     let history: HistoryRepository?
     let mediaCatalog: MediaCatalogRepository?
+    /// 本地数据库启动报告（2026-10-18 真机卡死修复：失败可见、可恢复）
+    var storageBoot: StorageBootReport = StorageBootReport()
+    var onRetryStorage: () -> Void = {}
+    var onResetStorage: () -> Void = {}
     @State private var selectedTab: RootTab = .media
     @State private var showFolderSelection = false
+    @State private var didRecordStorageFailure = false
     @FocusState private var focusedDockTab: RootTab?
 
     var body: some View {
@@ -154,16 +159,23 @@ struct RootView: View {
     private var cinemaTab: some View {
         if let account = model.account, let client = model.client,
            let mediaCatalog, let history {
-            MediaLibraryScreen(
-                client: client,
-                accountID: account.accountId,
-                history: history,
-                tokenStore: TMDBCredentialStore(),
-                catalog: mediaCatalog,
-                diagnostics: model.diagnostics,
-            )
-            .id(account.accountId)
-            .ignoresSafeArea(edges: .top)
+            ZStack(alignment: .top) {
+                MediaLibraryScreen(
+                    client: client,
+                    accountID: account.accountId,
+                    history: history,
+                    tokenStore: TMDBCredentialStore(),
+                    catalog: mediaCatalog,
+                    diagnostics: model.diagnostics,
+                )
+                .id(account.accountId)
+                .ignoresSafeArea(edges: .top)
+
+                // 降级模式横幅：主库失败但已回退临时库，首页可用但数据不持久化
+                if storageBoot.isDegraded {
+                    storageDegradedBanner
+                }
+            }
         } else if model.account == nil {
             ScrollView {
                 VStack(spacing: 32) {
@@ -182,6 +194,10 @@ struct RootView: View {
                 .frame(maxWidth: 1200)
                 .padding(60)
             }
+        } else if storageBoot.hasFailure {
+            // 本地数据库初始化彻底失败（无降级库可用）：显示原因与恢复入口，
+            // 不再让用户永远停在"正在准备…"转圈页（2026-10-18 真机卡死修复）
+            storageFailurePanel
         } else {
             VStack(spacing: 20) {
                 ProgressView().scaleEffect(1.6)
@@ -189,6 +205,74 @@ struct RootView: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    // MARK: - 本地数据库失败恢复面板
+    private var storageFailurePanel: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .font(.system(size: 64))
+                .foregroundStyle(.orange)
+            Text("本地媒体数据库初始化失败")
+                .font(.title.bold())
+            Text(storageBoot.summary.isEmpty ? "未知原因。" : storageBoot.summary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 1000)
+            Text("可先重试初始化；若仍失败，清除本地缓存后将重建空数据库（观看记录与已刮削匹配会清空，网盘文件不受影响）。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 900)
+            HStack(spacing: 20) {
+                Button("重试初始化", action: onRetryStorage)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.cyan)
+                Button("清除本地缓存并重建", role: .destructive, action: onResetStorage)
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(60)
+        .focusSection()
+        .task {
+            guard !didRecordStorageFailure else { return }
+            didRecordStorageFailure = true
+            model.diagnostics.record("本地数据库初始化失败，已展示恢复面板。")
+        }
+    }
+
+    // MARK: - 降级模式横幅（首页顶部悬浮）
+    private var storageDegradedBanner: some View {
+        HStack(spacing: 16) {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("本地数据库异常，已切换为临时降级模式（观看记录与刮削缓存本次不保存）。")
+                    .font(.callout)
+                if !storageBoot.summary.isEmpty {
+                    Text(storageBoot.summary)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+            }
+            Button("重试初始化", action: onRetryStorage)
+                .buttonStyle(.bordered)
+            Button("清除并重建", role: .destructive, action: onResetStorage)
+                .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.4), radius: 16, x: 0, y: 8)
+        .padding(.top, 130)
+        .focusSection()
+        .task {
+            guard !didRecordStorageFailure else { return }
+            didRecordStorageFailure = true
+            model.diagnostics.record("本地数据库初始化失败，已启用临时降级模式。")
         }
     }
 
@@ -728,13 +812,25 @@ private struct SettingsScreen: View {
             )
             isExportingLogs = false
             switch result {
-            case .success(let url):
-                diagnosticsMessage = "已打包存档：\(url.lastPathComponent)"
-                exportAlertMessage = "系统日志与设备信息已成功打包，并已发送至开发者维护邮箱：\n\(DiagnosticMailDispatcher.recipientEmail)"
+            case .success(let outcome):
+                let archiveName = outcome.archiveURL.lastPathComponent
+                diagnosticsMessage = "已打包存档：\(archiveName)"
+                switch outcome.remoteStatus {
+                case .sent:
+                    exportAlertMessage = "系统日志与设备信息已成功打包，并已发送至开发者维护邮箱：\n\(DiagnosticMailDispatcher.recipientEmail)"
+                    model.diagnostics.record("诊断日志已打包并成功外发。")
+                case .notConfigured:
+                    exportAlertMessage = "日志已在设备本地打包存档（\(archiveName)）。\n当前版本未配置邮件中继服务器，无法自动外发至 \(DiagnosticMailDispatcher.recipientEmail)。"
+                    model.diagnostics.record("诊断日志已本地打包；未配置邮件中继，未外发。")
+                case .failed(let reason):
+                    exportAlertMessage = "日志已在设备本地打包存档（\(archiveName)），但发送至维护邮箱失败：\(reason)"
+                    model.diagnostics.record("诊断日志外发失败：\(reason)")
+                }
                 showExportAlert = true
             case .failure(let error):
                 diagnosticsMessage = "打包失败：\(error.localizedDescription)"
                 exportAlertMessage = "打包日志失败：\(error.localizedDescription)"
+                model.diagnostics.record("诊断日志打包失败。")
                 showExportAlert = true
             }
         }

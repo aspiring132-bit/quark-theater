@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import os
 
 enum HistoryRepositoryError: Error, LocalizedError, Equatable {
     case invalidIdentifier
@@ -34,7 +35,9 @@ final class HistoryRepository {
     // are on the main actor. Safe, but opted out of Swift 6 actor isolation checking.
     nonisolated(unsafe) private var database: OpaquePointer?
     private static let schemaVersion = 2
+    private static let logger = Logger(subsystem: "org.quarktheater.app", category: "HistoryRepository")
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    private let databaseURL: URL
 
     init(url: URL) throws {
         guard url.isFileURL else { throw HistoryRepositoryError.invalidDatabaseURL }
@@ -42,9 +45,26 @@ final class HistoryRepository {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        databaseURL = url
+        do {
+            try openAndMigrate(allowingRebuild: true)
+        } catch {
+            if let handle = database {
+                sqlite3_close_v2(handle)
+                database = nil
+            }
+            throw error
+        }
+    }
+
+    /// Opens the database and runs migrations. When the on-disk schema is newer
+    /// than this build supports, the file is backed up and rebuilt empty instead
+    /// of throwing — a thrown error here permanently strands the app on the
+    /// "正在准备私人影院媒体库…" loading branch (2026-10-18 真机卡死根因).
+    private func openAndMigrate(allowingRebuild: Bool) throws {
         var opened: OpaquePointer?
         let result = sqlite3_open_v2(
-            url.path, &opened,
+            databaseURL.path, &opened,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
             nil
         )
@@ -54,14 +74,34 @@ final class HistoryRepository {
         }
         database = opened
         do {
-            try check(sqlite3_busy_timeout(database, 250), operation: "busy timeout")
+            try check(sqlite3_busy_timeout(database, 1000), operation: "busy timeout")
             try migrate()
+        } catch HistoryRepositoryError.unsupportedSchema(let version) where allowingRebuild {
+            sqlite3_close_v2(database)
+            database = nil
+            Self.logger.warning("watch-history schema v\(version, privacy: .public) > supported v\(Self.schemaVersion, privacy: .public); backing up and rebuilding")
+            try rebuildUnsupportedDatabase(version: version)
+            try openAndMigrate(allowingRebuild: false)
         } catch {
             // Clear the handle so a fully initialized throwing instance cannot close it twice.
             sqlite3_close_v2(database)
             database = nil
             throw error
         }
+    }
+
+    /// Moves an incompatible database aside (best-effort backup) and removes the
+    /// WAL/SHM sidecars so the next open starts from a clean, empty file.
+    private func rebuildUnsupportedDatabase(version: Int) throws {
+        let fileManager = FileManager.default
+        let backupURL = databaseURL.deletingLastPathComponent()
+            .appendingPathComponent("\(databaseURL.lastPathComponent).unsupported-v\(version).bak")
+        try? fileManager.removeItem(at: backupURL)
+        // 备份失败不阻断重建
+        try? fileManager.copyItem(at: databaseURL, to: backupURL)
+        try fileManager.removeItem(at: databaseURL)
+        try? fileManager.removeItem(at: URL(fileURLWithPath: databaseURL.path + "-wal"))
+        try? fileManager.removeItem(at: URL(fileURLWithPath: databaseURL.path + "-shm"))
     }
 
     deinit {

@@ -455,15 +455,10 @@ actor DiagnosticsStore {
         exportDirectoryURL: URL? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
-        let directory = directoryURL ?? FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("Diagnostics", isDirectory: true)
+        let directory = directoryURL ?? StoragePaths.diagnosticsDirectory
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("Diagnostics", isDirectory: true)
         let resolvedFileURL = directory.appendingPathComponent("diagnostics.jsonl")
-        let resolvedExportDirectory = exportDirectoryURL ?? FileManager.default.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0]
+        let resolvedExportDirectory = exportDirectoryURL ?? StoragePaths.exportDirectory
 
         self.fileURL = resolvedFileURL
         self.exportDirectoryURL = resolvedExportDirectory

@@ -6,6 +6,21 @@ import UIKit
 final class DiagnosticMailDispatcher {
     static let recipientEmail = "aspiring.ad@outlook.com"
 
+    /// Result of the remote e-mail relay attempt.
+    enum RemoteDispatchStatus: Equatable {
+        /// The relay endpoint accepted the package (HTTP 2xx).
+        case sent
+        /// No relay endpoint is configured in Info.plist (`DiagnosticsRelayURL`).
+        case notConfigured
+        /// The relay endpoint was unreachable or rejected the package.
+        case failed(String)
+    }
+
+    struct DispatchOutcome {
+        let archiveURL: URL
+        let remoteStatus: RemoteDispatchStatus
+    }
+
     struct DeviceReport: Codable {
         let deviceName: String
         let model: String
@@ -25,6 +40,23 @@ final class DiagnosticMailDispatcher {
         let logCount: Int
         let logs: [DiagnosticRecord]
         let generatedAt: Date
+    }
+
+    /// Optional e-mail relay endpoint.
+    ///
+    /// tvOS has no system mail composer, so delivery requires an HTTPS relay
+    /// that forwards the JSON payload to `recipientEmail`. Configure it by
+    /// adding a `DiagnosticsRelayURL` string entry to the app's Info.plist
+    /// (or an `INFOPLIST_KEY_DiagnosticsRelayURL` build setting). When the
+    /// key is absent the package is still archived locally and the UI reports
+    /// `.notConfigured` honestly instead of pretending the mail was sent.
+    static var relayEndpointURL: URL? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "DiagnosticsRelayURL") as? String,
+              let url = URL(string: raw),
+              url.scheme?.lowercased() == "https" else {
+            return nil
+        }
+        return url
     }
 
     static func buildPayload(diagnostics: Diagnostics, accountName: String?) -> FullDiagnosticPayload {
@@ -54,9 +86,10 @@ final class DiagnosticMailDispatcher {
         )
     }
 
-    /// Dispatches the diagnostic package and device information to aspiring.ad@outlook.com.
-    /// Also archives a local snapshot in the application diagnostics directory.
-    static func dispatchPackage(diagnostics: Diagnostics, accountName: String?) async -> Result<URL, Error> {
+    /// Archives the diagnostic package locally, then attempts remote delivery
+    /// to `recipientEmail` via the configured relay endpoint. The outcome
+    /// always reflects what actually happened.
+    static func dispatchPackage(diagnostics: Diagnostics, accountName: String?) async -> Result<DispatchOutcome, Error> {
         let payload = buildPayload(diagnostics: diagnostics, accountName: accountName)
 
         let encoder = JSONEncoder()
@@ -76,19 +109,31 @@ final class DiagnosticMailDispatcher {
             let fileURL = folder.appendingPathComponent(filename)
             try data.write(to: fileURL, options: .atomic)
 
-            // Asynchronous dispatch to the mail relay service
-            if let webhookURL = URL(string: "https://api.quark-theater.org/api/v1/diagnostics/dispatch") {
-                var request = URLRequest(url: webhookURL)
-                request.httpMethod = "POST"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.httpBody = data
-                request.timeoutInterval = 8
-                _ = try? await URLSession.shared.data(for: request)
-            }
-
-            return .success(fileURL)
+            let remoteStatus = await dispatchRemotely(data: data)
+            return .success(DispatchOutcome(archiveURL: fileURL, remoteStatus: remoteStatus))
         } catch {
             return .failure(error)
+        }
+    }
+
+    private static func dispatchRemotely(data: Data) async -> RemoteDispatchStatus {
+        guard let webhookURL = relayEndpointURL else { return .notConfigured }
+
+        var request = URLRequest(url: webhookURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        request.timeoutInterval = 10
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                return .sent
+            }
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            return .failed("HTTP \(code)")
+        } catch {
+            return .failed(error.localizedDescription)
         }
     }
 }
