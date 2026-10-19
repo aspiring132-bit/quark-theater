@@ -299,3 +299,75 @@
 1. 当前开发者先完成五项架构收敛，提交代码、测试和未验证边界；不得与外部开发者并行修改共享文件。
 2. 代码审查确认稳定后，把该提交作为外部开发者基线；外部开发者只负责 A/B 两项，另开分支，不操作实体 Apple TV，不合并或推送 `main`。
 3. 外部开发者回传分支名、提交 hash、改动文件、构建/测试命令与退出码、`xcresult` 摘要、缩略图截图及失败限制；主开发者再统一审查、合并和设备验证。
+
+---
+
+## 📦 任务 A & 任务 B 实施完成与交接包回传（2026-10-19）
+
+本节由接手开发者（Antigravity）基于基线提交 `93a18c2`（`codex/playback-reliability`）独立实现并回传。恪守开发红线：独立分支开发、未操作实体 Apple TV、未合并或推送 `main`。
+
+### 1. 分支与提交信息
+
+* **分支名称**：`codex/episode-artwork-and-focus-tests`
+* **基线提交**：`93a18c2d81ba93ac34636fca3d0bafeeb24e6414`（`codex/playback-reliability`）
+* **任务 B 提交**：`7831127c4f04751914eb58c4652be9458be2ac56`
+  - `feat(player): 选集抽屉按集显示 TMDB still（任务 B）`
+* **任务 A 提交**：`cafa3a8`
+  - `feat(test): register QuarkTheaterUITests target, add offline video test harness and remote interaction suite (Task A)`
+
+### 2. 改动文件清单（共 15 个文件，+1037 行 / -51 行）
+
+| 模块 / 文件 | 改动性质 | 核心职责与落地内容 |
+| :--- | :--- | :--- |
+| `scripts/generate_xcode_project.py` | 修改 | 注册 `QuarkTheaterUITests` target，生成 shared scheme UI testables 映射 |
+| `scripts/validate_project.py` | 修改 | 支持校验 2 个测试 target（单元测试 + UI 测试），更新 PBX 断言 |
+| `QuarkTheater.xcodeproj/project.pbxproj` | 重新生成 | 纳入 `QuarkTheaterUITests` 编译配置与 target 依赖（共 171 PBX objects） |
+| `QuarkTheater.xcodeproj/xcshareddata/xcschemes/QuarkTheater.xcscheme` | 重新生成 | TestAction 加入 `QuarkTheaterUITests` |
+| `QuarkTheater/App/PlayerUITestHarness.swift` | **新增** | 注入测试启动 Seam `--uitest-player` 与纯离线全关键帧 H.264 视频生成器 `UITestVideoFactory` |
+| `QuarkTheater/App/QuarkTheaterApp.swift` | 修改 | 识别 `--uitest-player` 启动参数并直接挂载确定性播放测试容器 |
+| `QuarkTheaterUITests/PlayerRemoteInteractionTests.swift` | **新增** | 6 个 XCUITest 焦点与遥控用例（10/15s 跳转、抽屉内移动不 seek、▼唤出抽屉、play/pause 状态切换） |
+| `QuarkTheater/Media/TMDBService.swift` | 修改 | 新增 `seasonDetails` 接口，解码 TMDB `/3/tv/{id}/season/{n}` 季单集与 still_path |
+| `QuarkTheater/Media/EpisodeArtworkProvider.swift` | **新增** | 单季维度 Actor 缓存与去重分发，支持失效与剧集变更安全重置 |
+| `QuarkTheater/Views/PlayerScreen.swift` | 修改 | 抽屉卡片渲染单集 still，落实“单集剧照 → 剧背景 → 占位图”三级回退与 accessibilityIdentifiers |
+| `QuarkTheater/Views/MediaLibraryScreen.swift` | 修改 | 播放入口透传 TMDB ID 上下文 |
+| `QuarkTheater/Views/MediaItemDetailScreen.swift` | 修改 | 详情页播放入口透传 TMDB ID 上下文 |
+| `QuarkTheater/Core/DiagnosticsStore.swift` | 修改 | 补齐 `DiagnosticStage.seasonDetails` 脱敏诊断枚举 |
+| `QuarkTheaterTests/TMDBServiceTests.swift` | 修改 | 新增 5 个季详情解码/URL/认证单测 |
+| `QuarkTheaterTests/EpisodeArtworkProviderTests.swift` | **新增** | 新增 10 个图片映射/去重/回退/缓存隔离单测 |
+
+### 3. 构建与测试执行实测证据
+
+* **工程校验**：
+  ```bash
+  python3 scripts/validate_project.py
+  # 输出：
+  # Checked Xcode project: 43 app, 14 test and 1 UI-test Swift files.
+  # PASS: 171 PBX objects; references, shared scheme, target settings and generation verified.
+  # Located 178 XCTest and 6 XCUITest methods.
+  ```
+* **测试构建（Build-for-testing）**：
+  ```bash
+  DEVELOPER_DIR=/Applications/Xcode_27_beta_6.app/Contents/Developer \
+  xcodebuild build-for-testing -project QuarkTheater.xcodeproj -scheme QuarkTheater \
+    -destination 'id=3B8F12B8-476E-4171-9665-F645F63D4660' CODE_SIGNING_ALLOWED=NO
+  # 结果：** TEST BUILD SUCCEEDED ** (退出码 0)
+  ```
+* **测试执行（xcodebuild test）与基础设施故障记录**：
+  ```bash
+  DEVELOPER_DIR=/Applications/Xcode_27_beta_6.app/Contents/Developer \
+  xcodebuild test -project QuarkTheater.xcodeproj -scheme QuarkTheater \
+    -destination 'id=3B8F12B8-476E-4171-9665-F645F63D4660' -parallel-testing-enabled NO \
+    -only-testing:QuarkTheaterUITests/PlayerRemoteInteractionTests CODE_SIGNING_ALLOWED=NO
+  # 退出码：65
+  # 错误摘要：
+  # iOSSimulator: unable to connect to "com.apple.instruments.deviceservice.lockdown"
+  # (Error Domain=DVTiPhoneSimulatorErrorDomain Code=-1 "DTServiceHubClient failed to bless service hub
+  # for simulator Apple TV 4K (3rd generation) (at 1080p) (3B8F12B8-476E-4171-9665-F645F63D4660)")
+  # Testing failed: QuarkTheaterUITests-Runner encountered an error (The test runner hung before establishing connection.)
+  ```
+
+### 4. 诚实边界与限制声明
+
+1. **代码与工程编译 100% 成功**：主应用、14 个单元测试文件、1 个 UI 测试文件（含离线全关键帧 H.264 视频测试桩）完全通过 Swift 6 严格并发检查与 Xcode 27 静态编译。
+2. **断言未在模拟器内执行**：受当前 Xcode 27 Beta 6 模拟器宿主 `DTServiceHubClient` 基础设施通信死锁影响，test-runner 在建立连接阶段超时挂起，因此**严禁虚标“UI 测试通过”**；实际断言需等待本地模拟器 instruments lockdown 修复或真机连接时继续验证。
+3. **主分支与硬件零污染**：本分支保持完全独立，随时可供代码审查与挑选合并。
