@@ -38,7 +38,9 @@ enum FilenameParser {
     private static let yearPattern = #"(?:\(|\b)((?:19|20)\d{2})(?:\)|\b)"#
     private static let releaseTail = #"(?i)[ ._-]+(?:2160p|1080p|720p|480p|4k|8k|bluray|blu.?ray|web.?dl|webrip|hdtv|proper|remux|x26[45]|h\.?26[45]|hevc|avc|aac|dts).*$"#
     private static let strictSeasonPattern = #"(?i)^(?:s(?:eason)?\s*0?([0-9]{1,2})|第\s*([0-9]{1,2}|[一二三四五六七八九十]+)\s*季)$"#
-    private static let embeddedSeasonPattern = #"(?i)(?:[ ._-]|^)(?:s(?:eason)?\s*0?([0-9]{1,2})|第\s*([0-9]{1,2}|[一二三四五六七八九十]+)\s*季)(?:[ ._-]|$)"#
+    /// 尾部季标识：匹配文件夹名结尾的「第X季 / Season N / Sxx」，不要求其前必须有分隔符，
+    /// 因此能识别"高堡奇人第四季""高堡奇人第4季""高堡奇人 S04"这类剧名与季号紧邻的情况。
+    private static let tailSeasonPattern = #"(?i)(?:第\s*([0-9]{1,2}|[一二三四五六七八九十]+)\s*季|[sS](?:eason)?\s*0?([0-9]{1,2}))\s*$"#
     private static let genericFolders: Set<String> = [
         "extras", "specials", "featurettes", "trailers", "extra", "special",
         "影视", "电影", "电视剧", "tv", "movies", "shows", "series", "0"
@@ -154,23 +156,7 @@ enum FilenameParser {
 
             // Only single seasons should match. Ranges like S01~S04 or S01-S04 are multi-season containers.
             if season == nil && !comp.contains("~") && !comp.contains("-S") && !comp.contains("-s") {
-                if let m = firstMatch(strictSeasonPattern, in: comp) {
-                    let g1 = capture(m, 1, comp)
-                    let g2 = capture(m, 2, comp)
-                    if !g1.isEmpty, let num = Int(g1) {
-                        season = num
-                    } else if !g2.isEmpty, let num = parseChineseSeasonNumber(g2) {
-                        season = num
-                    }
-                } else if let m = firstMatch(embeddedSeasonPattern, in: comp) {
-                    let g1 = capture(m, 1, comp)
-                    let g2 = capture(m, 2, comp)
-                    if !g1.isEmpty, let num = Int(g1) {
-                        season = num
-                    } else if !g2.isEmpty, let num = parseChineseSeasonNumber(g2) {
-                        season = num
-                    }
-                }
+                season = seasonNumber(inFolder: comp)
             }
 
             if show == nil, let ft = usableFolderTitle(comp) {
@@ -184,6 +170,34 @@ enum FilenameParser {
             show = rootTitle
         }
         return (show, season)
+    }
+
+    /// 从文件夹名提取季号。支持独立季文件夹（"Season 04"/"S04"/"第四季"/"第4季"）
+    /// 以及"剧名+季"尾部标识（"高堡奇人第四季"/"高堡奇人第4季"/"高堡奇人 S04"）。
+    /// 2026-10-18 修复：旧 embeddedSeasonPattern 要求"第"前必须有分隔符，
+    /// 导致"高堡奇人第四季"这类中文紧接季标识的文件夹无法提取季号。
+    static func seasonNumber(inFolder folderName: String) -> Int? {
+        // 范围容器（"高堡奇人S01~S04"/"S01-S04"）不是单季，跳过，避免尾部 S04 被误判
+        if folderName.contains("~") || folderName.contains("-S") || folderName.contains("-s") {
+            return nil
+        }
+        if let m = firstMatch(strictSeasonPattern, in: folderName) {
+            return seasonValue(match: m, in: folderName)
+        }
+        if let m = firstMatch(tailSeasonPattern, in: folderName) {
+            return seasonValue(match: m, in: folderName)
+        }
+        return nil
+    }
+
+    private static func seasonValue(match: NSTextCheckingResult, in value: String) -> Int? {
+        for index in 1..<match.numberOfRanges {
+            let group = capture(match, index, value)
+            guard !group.isEmpty else { continue }
+            if let num = Int(group) { return num }
+            if let num = parseChineseSeasonNumber(group) { return num }
+        }
+        return nil
     }
 
     private static func parseChineseSeasonNumber(_ text: String) -> Int? {

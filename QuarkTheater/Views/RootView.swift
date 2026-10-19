@@ -286,6 +286,7 @@ struct RootView: View {
                     client: client,
                     accountID: account.accountId,
                     history: history,
+                    mediaCatalog: mediaCatalog,
                     showFolderSelection: $showFolderSelection,
                     onBackToCinema: { selectedTab = .media }
                 )
@@ -334,6 +335,7 @@ private struct SourcesManagementScreen: View {
     let client: QuarkClient?
     let accountID: String
     let history: HistoryRepository?
+    let mediaCatalog: MediaCatalogRepository?
     @Binding var showFolderSelection: Bool
     var onBackToCinema: () -> Void = {}
 
@@ -489,7 +491,7 @@ private struct SourcesManagementScreen: View {
                         Text("网盘文件目录浏览")
                             .font(.title2.bold())
                         FileBrowserScreen(client: client, diagnostics: model.diagnostics, isMock: model.isMock,
-                                          accountID: accountID, history: history)
+                                          accountID: accountID, history: history, catalog: mediaCatalog)
                     }
                     .padding(.top, 16)
                     .focusSection()

@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// 未分季哨兵：季号缺失的剧集不再被强行并入第 1 季，而是单列一个"未分季"分组。
+private let unassignedSeason = -1
+
 @MainActor
 struct MediaItemDetailScreen: View {
     let item: MediaItem
@@ -21,6 +24,15 @@ struct MediaItemDetailScreen: View {
     @State private var watchProgressByFileId: [String: Double] = [:]
     @FocusState private var focusedEpisodeID: String?
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
+
+    static func playbackQueue(for selectedFile: CloudFile,
+                              episodes: [(MediaItem, CloudFile, ParsedMediaName)]) -> [CloudFile] {
+        guard let selected = episodes.first(where: { $0.1.fileId == selectedFile.fileId }) else {
+            return [selectedFile]
+        }
+        guard selected.2.episodeNumber != nil else { return [selectedFile] }
+        return episodes.filter { $0.2.episodeNumber != nil }.map { $0.1 }
+    }
 
     /// Builds one rematch candidate per confirmed file. Confirmed metadata is
     /// retained as the fallback when the original scanner candidates were not
@@ -79,14 +91,15 @@ struct MediaItemDetailScreen: View {
             let season = metadata.seasonNumber ?? cand?.parsedName.seasonNumber
             let episode = metadata.episodeNumber ?? cand?.parsedName.episodeNumber
             let parsed = cand?.parsedName ?? FilenameParser.parse(file.name, detectedSeasonNumber: season)
-            let effectiveParsed = ParsedMediaName(
+            let effectiveParsed = EpisodeMetadataProjection.project(metadata: metadata, parsed: ParsedMediaName(
                 title: parsed.title,
                 year: parsed.year,
                 mediaType: metadata.mediaType,
                 seasonNumber: season ?? parsed.seasonNumber,
                 episodeNumber: episode ?? parsed.episodeNumber,
-                inferredFromParent: parsed.inferredFromParent
-            )
+                inferredFromParent: parsed.inferredFromParent,
+                unresolvedReason: parsed.unresolvedReason
+            ))
             return (metadata, file, effectiveParsed)
         }
 
@@ -103,8 +116,8 @@ struct MediaItemDetailScreen: View {
         }
 
         for cand in unconfirmedMatching {
-            let season = cand.parsedName.seasonNumber ?? 1
-            let episode = cand.parsedName.episodeNumber ?? 1
+            let season = cand.parsedName.seasonNumber
+            let episode = cand.parsedName.episodeNumber
             let syntheticItem = MediaItem(
                 id: cand.file.fileId,
                 fileId: cand.file.fileId,
@@ -127,17 +140,17 @@ struct MediaItemDetailScreen: View {
         }
 
         return result.sorted {
-            let s0 = $0.2.seasonNumber ?? 0
-            let s1 = $1.2.seasonNumber ?? 0
+            let s0 = $0.2.seasonNumber ?? Int.max
+            let s1 = $1.2.seasonNumber ?? Int.max
             if s0 != s1 { return s0 < s1 }
-            let e0 = $0.2.episodeNumber ?? 0
-            let e1 = $1.2.episodeNumber ?? 0
+            let e0 = $0.2.episodeNumber ?? Int.max
+            let e1 = $1.2.episodeNumber ?? Int.max
             return e0 < e1
         }
     }
 
     private var seasonGroups: [Int: [(MediaItem, CloudFile, ParsedMediaName)]] {
-        Dictionary(grouping: episodes, by: { $0.2.seasonNumber ?? 1 })
+        Dictionary(grouping: episodes, by: { $0.2.seasonNumber ?? unassignedSeason })
     }
 
     private var sortedSeasons: [Int] {
@@ -149,10 +162,15 @@ struct MediaItemDetailScreen: View {
     }
 
     private var resumeEpisode: (MediaItem, CloudFile, ParsedMediaName)? {
-        episodes.first(where: {
+        let inProgress = episodes.first(where: {
             let progress = watchProgressByFileId[$0.1.fileId] ?? 0
             return progress > 0 && progress < 0.95
-        }) ?? episodes.first
+        })
+        if inProgress != nil { return inProgress }
+        if item.mediaType == .series {
+            return episodes.first(where: { $0.2.episodeNumber != nil })
+        }
+        return episodes.first
     }
 
     var body: some View {
@@ -208,9 +226,11 @@ struct MediaItemDetailScreen: View {
                                     Button {
                                         selectedFile = target.1
                                     } label: {
-                                        let epNum = target.2.episodeNumber ?? 1
-                                        let sNum = target.2.seasonNumber ?? 1
-                                        let labelText = item.mediaType == .series ? "继续播放 S\(sNum)E\(epNum)" : "播放正片"
+                                        let epNum = target.2.episodeNumber
+                                        let sNum = target.2.seasonNumber
+                                        let labelText = item.mediaType == .series
+                                            ? (sNum.flatMap { season in epNum.map { "继续播放 S\(season)E\($0)" } } ?? "继续播放待确认集")
+                                            : "播放正片"
                                         Label(labelText, systemImage: "play.fill")
                                             .font(.headline.bold())
                                     }
@@ -278,7 +298,9 @@ struct MediaItemDetailScreen: View {
                     HStack {
                         let headerTitle: String = {
                             if item.mediaType == .series {
-                                return "第 \(selectedSeason) 季 · 剧集列表"
+                                return selectedSeason == unassignedSeason
+                                    ? "未分季 · 剧集列表"
+                                    : "第 \(selectedSeason) 季 · 剧集列表"
                             } else if currentSeasonEpisodes.count > 1 {
                                 return "可选播放版本 (\(currentSeasonEpisodes.count) 个版本)"
                             } else {
@@ -329,11 +351,12 @@ struct MediaItemDetailScreen: View {
                 client: client,
                 accountID: accountID,
                 file: file,
-                queue: currentSeasonEpisodes.map(\.1),
+                queue: Self.playbackQueue(for: file, episodes: currentSeasonEpisodes),
                 automaticallyPlayNext: autoPlayNextEpisode,
                 history: history,
                 diagnostics: diagnostics,
-                backdropURL: item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
+                backdropURL: item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") },
+                episodeMetadataByFileID: Dictionary(uniqueKeysWithValues: currentSeasonEpisodes.map { ($0.1.fileId, $0.2) })
             )
         }
         .sheet(isPresented: $showRematchSheet) {
@@ -355,11 +378,11 @@ struct MediaItemDetailScreen: View {
     // MARK: - Episode Card View
     @ViewBuilder
     private func episodeCard(_ metadata: MediaItem, file: CloudFile, parsed: ParsedMediaName) -> some View {
-        let epNumber = parsed.episodeNumber ?? 1
+        let epNumber = parsed.episodeNumber
         let progress = watchProgressByFileId[file.fileId] ?? 0
         let cardTitle: String = {
             if item.mediaType == .series {
-                return "第 \(epNumber) 集"
+                return epNumber.map { "第 \($0) 集" } ?? "待确认集数"
             } else if currentSeasonEpisodes.count > 1 {
                 return movieVersionTag(filename: file.name)
             } else {
@@ -517,7 +540,7 @@ private struct SeasonTabButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Text("第 \(season) 季")
+                Text(season == unassignedSeason ? "未分季" : "第 \(season) 季")
                     .font(.headline.weight(isFocused || isSelected ? .bold : .medium))
                 Text("(\(count)集)")
                     .font(.subheadline)

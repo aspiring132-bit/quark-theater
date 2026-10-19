@@ -18,19 +18,23 @@ struct FileBrowserScreen: View {
     private let history: HistoryRepository?
     private let client: QuarkClient
     private let diagnostics: Diagnostics
+    private let catalog: MediaCatalogRepository?
+    @State private var confirmedMetadataByFileID: [String: MediaItem] = [:]
     let isMock: Bool
 
     init(client: QuarkClient, diagnostics: Diagnostics, isMock: Bool, accountID: String,
-         history: HistoryRepository?) {
+         history: HistoryRepository?, catalog: MediaCatalogRepository? = nil) {
         _model = StateObject(wrappedValue: FileBrowserViewModel(client: client, diagnostics: diagnostics, accountID: accountID))
         self.isMock = isMock
         self.accountID = accountID
         self.history = history
         self.client = client
         self.diagnostics = diagnostics
+        self.catalog = catalog
     }
 
     var body: some View {
+        let showEmptyState = model.files.isEmpty && !model.isLoading && model.errorMessage == nil
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 HStack {
@@ -67,7 +71,9 @@ struct FileBrowserScreen: View {
                 }
                 if let error = model.errorMessage {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        Text(verbatim: error)
+                            .foregroundStyle(Color.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                         Button {
                             Task { await model.reload() }
                         } label: {
@@ -76,7 +82,7 @@ struct FileBrowserScreen: View {
                         .buttonStyle(.borderedProminent)
                     }
                 }
-                if model.files.isEmpty, !model.isLoading, model.errorMessage == nil {
+                if showEmptyState {
                     VStack(alignment: .leading, spacing: 16) {
                         Text("此目录暂无文件").foregroundStyle(.secondary)
                         Button("刷新目录") { Task { await model.reload() } }
@@ -85,25 +91,7 @@ struct FileBrowserScreen: View {
                 }
                 LazyVStack(spacing: 20) {
                     ForEach(model.files) { file in
-                        Button {
-                            if file.isDirectory { Task { await model.open(file) } }
-                            else if file.isVideo { selectedVideo = file }
-                            else { showPlaybackNotice = true }
-                        } label: {
-                            HStack(spacing: 28) {
-                                Image(systemName: file.isDirectory ? "folder.fill" : (file.isVideo ? "film" : "doc"))
-                                    .font(.system(size: 36)).frame(width: 50)
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Text(file.name).lineLimit(2)
-                                    Text(file.isDirectory ? "文件夹" : fileDescription(file)).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: file.isDirectory ? "chevron.right" : "info.circle")
-                            }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                        }
-                        .buttonStyle(.bordered)
-                        .focused($focusedTarget, equals: .file(file.fileId))
-                        .disabled(model.isLoading)
+                        fileRow(file)
                     }
                 }
                 if model.isLoading { ProgressView("正在读取目录") }
@@ -113,6 +101,11 @@ struct FileBrowserScreen: View {
             }.padding(60)
         }
         .task { await model.reload() }
+        .task(id: accountID) {
+            guard let catalog else { return }
+            confirmedMetadataByFileID = (try? catalog.confirmed(accountID: accountID))
+                .map { Dictionary(uniqueKeysWithValues: $0.map { ($0.fileId, $0) }) } ?? [:]
+        }
         .onChange(of: focusedTarget) { _, target in
             if let target { diagnostics.recordFocusTransition(FocusDiagnostics.target(for: target)) }
         }
@@ -131,19 +124,58 @@ struct FileBrowserScreen: View {
         }
         .fullScreenCover(item: $selectedVideo) { file in
             if let history {
+                let projection = directProjection(for: file)
                 PlayerScreen(
                     client: client,
                     accountID: accountID,
                     file: file,
-                    queue: model.files.filter(\.isVideo),
+                    queue: projection.queue,
                     automaticallyPlayNext: autoPlayNextEpisode,
                     history: history,
-                    diagnostics: diagnostics
+                    diagnostics: diagnostics,
+                    episodeMetadataByFileID: projection.metadata
                 )
             } else {
                 Text("无法创建本地观看记录数据库。")
             }
         }
+    }
+
+    private func directProjection(for selected: CloudFile) -> (queue: [CloudFile], metadata: [String: ParsedMediaName]) {
+        let videos = model.files.filter(\.isVideo)
+        let path = model.folders.map(\.name)
+        let metadata = Dictionary(uniqueKeysWithValues: videos.map {
+            let parsed = FilenameParser.parse($0.name, pathComponents: path, boundRootName: model.title)
+            return ($0.fileId, confirmedMetadataByFileID[$0.fileId].map { EpisodeMetadataProjection.project(metadata: $0, parsed: parsed) } ?? parsed)
+        })
+        return (PlaybackQueueProjection.directQueue(files: videos, selected: selected, metadata: metadata,
+                                                     confirmed: confirmedMetadataByFileID), metadata)
+    }
+
+    private func fileRow(_ file: CloudFile) -> some View {
+        let iconName = file.isDirectory ? "folder.fill" : (file.isVideo ? "film" : "doc")
+        let detail = file.isDirectory ? "文件夹" : fileDescription(file)
+        let trailingIcon = file.isDirectory ? "chevron.right" : "info.circle"
+        return Button {
+            if file.isDirectory { Task { await model.open(file) } }
+            else if file.isVideo { selectedVideo = file }
+            else { showPlaybackNotice = true }
+        } label: {
+            HStack(spacing: 28) {
+                Image(systemName: iconName).font(.system(size: 36)).frame(width: 50)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(verbatim: file.name).lineLimit(2)
+                    Text(verbatim: detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: trailingIcon)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+        .buttonStyle(.bordered)
+        .focused($focusedTarget, equals: .file(file.fileId))
+        .disabled(model.isLoading)
     }
 
     @ViewBuilder

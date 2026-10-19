@@ -8,6 +8,22 @@ struct MediaSyncResult: Equatable {
     let needsConfirmationCount: Int
 }
 
+/// Keeps unresolved series files in the manual-confirmation surface instead
+/// of repeatedly sending a filename with no episode number back to TMDB.
+enum MediaLibrarySyncPolicy {
+    static func shouldAutoRematch(candidate: ScannedMediaCandidate, isConfirmed: Bool) -> Bool {
+        guard !isConfirmed else { return false }
+        if candidate.parsedName.mediaType == .series {
+            return candidate.parsedName.episodeNumber != nil
+        }
+        return true
+    }
+
+    static func needsManualConfirmation(candidate: ScannedMediaCandidate, isConfirmed: Bool) -> Bool {
+        !isConfirmed && candidate.parsedName.mediaType == .series && candidate.parsedName.episodeNumber == nil
+    }
+}
+
 /// Coordinates scanning, catalog reconciliation, and automatic TMDB matching
 /// with single-flight concurrency protection.
 @MainActor
@@ -47,11 +63,27 @@ final class MediaLibrarySyncService {
 
         let changes = try catalog.reconcileScan(accountID: accountID, candidates: candidates)
         let confirmedItems = try catalog.confirmed(accountID: accountID)
-        let confirmedIDs = Set(confirmedItems.map(\.fileId))
-        let unconfirmed = candidates.filter { !confirmedIDs.contains($0.file.fileId) }
+        let confirmedByID = Dictionary(uniqueKeysWithValues: confirmedItems.map { ($0.fileId, $0) })
+        // Confirmed rows are stable input, including legacy rows missing a
+        // season/episode. Only files absent from the catalog are eligible for
+        // background matching, and unresolved series stay manual-confirmation.
+        let unconfirmed = candidates.filter { candidate in
+            MediaLibrarySyncPolicy.shouldAutoRematch(
+                candidate: candidate,
+                isConfirmed: confirmedByID[candidate.file.fileId] != nil
+            )
+        }
+        let skippedUnresolvedSeriesCount = candidates.reduce(into: 0) { count, candidate in
+            if MediaLibrarySyncPolicy.needsManualConfirmation(
+                candidate: candidate,
+                isConfirmed: confirmedByID[candidate.file.fileId] != nil
+            ) {
+                count += 1
+            }
+        }
 
         var autoMatchedCount = 0
-        var needsConfirmationCount = 0
+        var needsConfirmationCount = skippedUnresolvedSeriesCount
 
         if !unconfirmed.isEmpty {
             let groups = Dictionary(grouping: unconfirmed, by: {

@@ -8,8 +8,14 @@ protocol QuarkClient: AnyObject {
     func cancelQRCodeLogin()
     func listFiles(parentID: String, page: Int, pageSize: Int) async throws -> CloudFilePage
     func searchFiles(query: String, page: Int, pageSize: Int) async throws -> CloudFilePage
-    func playbackResource(fileID: String) async throws -> PlaybackResource
+    func playbackResource(fileID: String, correlationID: DiagnosticCorrelationID?) async throws -> PlaybackResource
     func logout() async throws
+}
+
+extension QuarkClient {
+    func playbackResource(fileID: String) async throws -> PlaybackResource {
+        try await playbackResource(fileID: fileID, correlationID: nil)
+    }
 }
 
 enum QuarkError: Error, LocalizedError, Equatable {

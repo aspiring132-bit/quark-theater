@@ -57,6 +57,6 @@ final class MockQuarkClient: QuarkClient {
         return CloudFilePage(files: Array(matches[start..<end]), page: page, pageSize: pageSize, total: matches.count)
     }
 
-    func playbackResource(fileID: String) async throws -> PlaybackResource { throw QuarkError.mockOnly }
+    func playbackResource(fileID: String, correlationID: DiagnosticCorrelationID?) async throws -> PlaybackResource { throw QuarkError.mockOnly }
     func logout() async throws { signedIn = false }
 }

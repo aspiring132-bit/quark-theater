@@ -212,97 +212,90 @@
 
 ---
 
-## 🧱 Codex follow-up：五项架构问题的总体收敛方案（2026-10-18；仅方案，尚未实施）
+## 🧱 Codex follow-up：五项架构问题的总体收敛方案与实际状态（2026-10-18）
 
-本节把上次架构审阅的五项问题收敛为一个渐进式目标。**不建议整套推翻重写**：保留现有 `QuarkClient` 协议、账号隔离仓储、已实现的扫描路径上下文和 KSPlayer 集成；优先建立清楚的状态所有权与执行边界，再逐块迁移。
+> 本节是交接基线。状态依据当前源码和工作树检查，不把“有文件/有测试”误写成“已完成”。当前分支为 `codex/playback-reliability`，HEAD 为 `1172c43`；工作树仍有未提交改动。以下五项没有任何一项可以标记为“已全部完成”。
 
-### 总体目标结构
+### 统一验收边界
 
-```text
-SwiftUI Views（只负责展示、焦点与用户输入）
-        ↓ Commands / Published State
-Feature ViewModels（MainActor：界面状态、导航、任务生命周期）
-        ↓ Use cases / protocols
-Domain services & actors（扫描、匹配、播放器适配、日志、数据库）
-        ↓
-QuarkClient / TMDB client / SQLite repositories / KSPlayer
-```
+目标结构仍是：SwiftUI View 只负责展示、焦点和输入；ViewModel 持有界面状态和任务生命周期；扫描/匹配/播放器/日志/数据库由可取消服务或 actor 负责；仓储和外部客户端通过协议隔离。必须同时满足代码边界、自动化测试和 tvOS 27 模拟器/“主卧”设备回归，才可标记完成。
 
-规则：UI 状态留在 `MainActor`；网络、媒体目录解析和数据库操作通过可取消的异步服务执行；异步结果以有版本号的状态/事件回传，避免旧任务覆盖新页面。View 不直接创建服务、执行匹配策略或写数据库。新边界应由协议/纯函数测试锁定，不要求所有简单页面都强行新增一层。
+### 1. 扫描 single-flight 与异步边界 — **部分实现**
 
-### 方案一：媒体扫描变为单航班、可取消的同步流程
+已存在：`QuarkTheater/ViewModels/MediaLibraryViewModel.swift` 已拥有扫描任务、取消、generation 防旧结果覆盖；`MediaLibrarySyncService.swift` 已有取消检查和未解析剧集转待确认的策略。
 
-**要解决的问题**：页面首次出现、回到前台、15 分钟定时器和手动按钮都能启动 `scan`；静默任务不受手动 `scanTask` 管理，`scan(silent:)` 没有全局重入保护。扫描、解析、SQLite reconcile 都从 `@MainActor` 页面/类型触发，可能同时重复请求 TMDB、替换候选状态并造成焦点或动画卡顿。
+未完成：`MediaLibrarySyncService` 和 `MediaCatalogRepository` 仍是 `@MainActor`；`MediaLibraryScreen.swift` 仍保留自己的扫描/刷新职责，ViewModel 尚未成为页面唯一入口；解析和数据库同步没有迁移到后台执行器，也没有统一的 scan reason 合并机制。
 
-**拟调整**：
+接手步骤：把首次进入、前台恢复、定时器、手动刷新都接入 ViewModel 的同一任务；把扫描纯逻辑和 SQLite 批处理移出 MainActor；补并发触发、取消、账号切换和大目录焦点响应测试。
 
-* 新增 `QuarkTheater/ViewModels/MediaLibraryViewModel.swift`：唯一拥有扫描状态、活动任务、进度、取消和最后一次扫描结果；启动、前台恢复、定时器、手动刷新统一调用同一个 `requestScan(reason:)`。已有扫描时合并普通触发；用户明确点“取消”时取消当前任务；新账号/绑定目录变化时用 generation 标记拒绝旧结果。
-* 新增 `QuarkTheater/Media/MediaLibrarySyncService.swift`（或 `Services/` 下的同职责 use case）：串起 `MediaLibraryScanner`、TMDB 匹配和仓储写入；按批处理、限制并发，不允许每个文件各自无界并发请求。
-* 将 `MediaLibraryScanner` 的纯路径/文件名解析与 SQLite 批量工作移出 `MainActor`；UI 只接收进度事件和最终一致的媒体库快照。保留对分页、重复文件、深度和取消的现有安全保护。
-* `MediaLibraryScreen.swift` 缩减为绑定 ViewModel 状态、发送按钮命令、绘制海报/待匹配队列；扫描中间结果不直接覆盖正在显示的数据。
+### 2. 播放器输入、焦点和 KSPlayer 边界 — **部分实现**
 
-**验收**：启动与前台恢复同时发生只产生一个扫描任务；手动取消能停止网盘分页和后续刮削；连续触发不会重复写库；大目录解析/数据库同步期间遥控器焦点和滚动仍可响应；旧账号的迟到结果不会显示到新账号。
+已存在：`PlayerInputReducer.swift` 已将抽屉内横向移动交给 tvOS Focus Engine，播放器外左右方向键使用 10/15 秒偏好；`PlayerScreen.swift` 已集中到一处方向键入口并保留播放/暂停处理；`PlaybackCoordinator.swift` 已加入播放代际校验、切集前暂停旧播放器、音轨/路由心跳诊断。
 
-### 方案二：播放器输入、焦点和引擎能力各有唯一边界
+未完成：没有 `PlayerEngine`/`KSPlayerAdapter` 能力协议；`PlaybackCoordinator` 仍直接依赖 KSPlayer/AVFoundation；尚未证明 KSPlayer 完整覆盖音轨、字幕、进度保存后再删除 AVPlayer 路径；真实 Siri Remote、手机遥控器和模拟遥控器 UI 测试尚未完成。
 
-**要解决的问题**：`PlayerScreen` 有两套 `.onMoveCommand`；左右键当前只显示提示；焦点只标识 tab/content 区域而不是具体按钮；KSPlayer 路径与 AVPlayer 音轨/字幕实现没有一致能力面。
+接手步骤：先锁定焦点身份和抽屉状态测试，再抽出引擎协议/适配器；完成 KSPlayer 能力矩阵和 tvOS 27/“主卧”回归后，才移除 AVPlayer 分支和设置入口。
 
-**拟调整**：
+### 3. 媒体库页面瘦身与快照 — **基本未完成**
 
-* 新增 `QuarkTheater/Playback/PlayerInputReducer.swift`（纯 Swift 状态转换）：输入当前播放画面/抽屉/tab/列表焦点状态和遥控器事件，输出明确动作（seek、切换焦点、打开/关闭抽屉、播放/暂停）。`PlayerScreen.swift` 只注册一处输入入口，并把有焦点按钮的方向键留给 tvOS Focus Engine，不重复解释同一个方向键。
-* 将焦点目标改成唯一身份，例如 `.drawerTab(DrawerTab)`、`.episode(fileID)`、`.subtitle(index)`、`.audio(index)`；从抽屉切 tab、切项目或关闭时明确设置目标焦点/恢复来源焦点，不再让多个控件共用一个 FocusState 值。
-* 定义 `QuarkTheater/Playback/PlayerEngine` 能力协议及 `KSPlayerAdapter`：统一提供 play/pause、seek、播放状态、缓冲、音轨/字幕能力和元数据事件。`PlaybackCoordinator` 负责会话/续播/错误状态，不直接兼容两套底层播放器 API；View 不直接触碰 KSPlayer 或 AVPlayer 类型。
-* 短按 seek 间隔使用已确认的 10/15 秒偏好；长按按持续时间逐步加大跳转量。先补齐 KSPlayer 适配和设备验证，再删除 AVPlayer 兜底及其设置入口，避免先移除后发现字幕/进度等能力缺失。
-* `RootView` 的返回行为以后续导航层级优先：先收起播放器抽屉/详情/文件夹，再退到上一级页面，最后才退回影院；避免单一全局返回处理器抢走子页面返回语义。
+已存在：`MediaLibraryViewModel.swift` 提供候选、已确认媒体和海报筛选的初步投影；`MediaLibraryScreen.swift` 增加了电影快速播放队列投影；`MediaItemDetailScreen.swift` 增加未分季和未知集数的显示。
 
-**验收**：纯 reducer 测试覆盖每种界面状态与遥控器事件；tvOS UI 测试覆盖焦点身份和确认动作；主卧设备上实体 Siri Remote、手机遥控器、模拟器三种输入完成同一操作矩阵；KSPlayer 字幕/音轨不可用时显示明确空态而不是假按钮。
+未完成：`RootView.swift`/`MediaLibraryScreen.swift` 尚未把 ViewModel 作为唯一数据入口；页面仍直接承担扫描、匹配和仓储更新；没有 `MediaLibrarySnapshot`/稳定索引，焦点移动仍可能触发全量计算。
 
-### 方案三：把媒体库页面从“业务总控”拆成薄视图和可测试用例
+接手步骤：让页面只绑定 ViewModel 命令和不可变快照；统一手动匹配、自动匹配、重扫命令；为影片/季/集/版本建立稳定索引并补脱离 SwiftUI 的分组测试。
 
-**要解决的问题**：`MediaLibraryScreen.swift` 当前同时维护筛选、焦点、模态、扫描、TMDB 查询、置信度决策和数据库更新；海报卡片计算也会在 body 更新时重复过滤全量媒体。
+### 4. 刮削决策统一与低置信度分流 — **部分实现**
 
-**拟调整**：
+已存在：`MatchDecisionPolicy.swift` 集中 `0.95` 自动确认、`0.82` 人工确认阈值；`TMDBService` 已有查询级联；`FilenameParser.swift` 已补“高堡奇人第四季”等紧邻季号；`MediaLibrarySyncService.swift` 对缺集数剧集停止自动重试并留待确认；当前测试覆盖《高堡奇人》季号和 `KAPI_26-07-11_064912.mp4` 的未解析路径。
 
-* 页面状态与命令放进 `MediaLibraryViewModel`；扫描工作放进 `MediaLibrarySyncService`；解析与候选决策分别留在 `Media/` 的纯逻辑类型；数据库继续由 repository 独占写入。
-* 新增 `MediaLibrarySnapshot`/索引结果：一次从仓储读取后按 `tmdbId + mediaType` 建索引，预计算影片卡片、季/集数、版本列表和未匹配项目。焦点移动只改变当前选中 ID，不重新分组/过滤整个目录。
-* `MediaItemDetailScreen` 只消费当前媒体及其 seasons/variants snapshot；不要再从单文件记录临时推断“影视作品”和“播放版本”是同一实体。
-* 手动匹配、自动匹配和重扫都使用同一个 `MatchPipeline` 命令；页面只呈现匹配候选、理由和确认状态。
+未完成：`MediaLibraryScreen.swift` 仍存在独立的匹配快速路径/硬编码阈值；完整的父目录上下文、用户确认别名仓储、影片多版本关系和所有低置信度回归尚未统一到一个 MatchPipeline。
 
-**验收**：扫描、候选匹配、影片/季集分组可脱离 SwiftUI 单测；相同输入重扫得到相同分组；海报焦点变化不会触发网络访问/仓储写入；卡片顺序和焦点身份在重新加载后稳定。
+接手步骤：删除页面侧绕过策略的判断；让候选收集、规范化、评分、决策、写库只经过一个管线；实现账号隔离的确认别名和《挽救计划》三版本归组；保留蜘蛛侠人工确认及 KAPI 待匹配。
 
-### 方案四：统一刮削决策，候选搜索完整收集后再评分
+### 5. 数据库职责与生命周期 — **部分实现，风险未关闭**
 
-**要解决的问题**：评分器的 `0.82`/`0.95` 规则与页面当前 `0.58` 自动确认分叉；TMDB 查询在首个非空响应时返回，后续目录/英文/别名候选没有和首批结果一起排名。这让错误候选可能提前入库。
+已存在：`QuarkTheater/Core/StoragePaths.swift` 已优先尝试 Application Support，失败时回退 Caches，并有旧库复制迁移；`CodexUpdateTests.swift` 已覆盖路径命名；日志目录和导出目录也使用统一路径策略。
 
-**拟调整**：
+未完成：tvOS 真机上 Application Support 仍可能只读，观看历史和媒体目录因此落到可清理的 Caches；迁移使用 `try? copyItem`，没有 schema/行数校验、完成标记、回滚和错误上报；`HistoryRepository`、`MediaCatalogRepository` 仍是 `@MainActor`，尚无 actor/串行数据库执行器。
 
-* 在 `MediaMatchScorer` 附近新增单一 `MatchDecisionPolicy`，由它输出 `.autoConfirm`、`.needsUserConfirmation`、`.unmatched`，禁止 View 自己比较魔法数字。初始规则沿用现有评分器意图：分数 `>= 0.95` 才自动确认，`0.82 <= 分数 < 0.95` 进入人工确认，`< 0.82` 留在待匹配；实盘样本验证后再调整数值，阈值只保留一个定义。
-* `TMDBService` 负责生成并收集多种搜索候选；合并去重各查询/语言/媒体类型的 TMDB 结果后统一交给 scorer 排名，不因某个查询先返回非空就停止比较。
-* 自动流程只对 `.autoConfirm` 写入 `MediaCatalogRepository`；用户确认流程写入 TMDB 绑定和经过确认的别名；低分文件保持原始 `fileId` 与解析理由，继续待匹配，不自动猜。
-* 把蜘蛛侠人工确认、`KAPI_26-07-11_064912.mp4` 保持待匹配以及《挽救计划》多版本归组作为决策回归样本；不让别名学习在未确认时生效。
+接手步骤：设计可验证的迁移状态和回滚；确认 tvOS 可持久化目录并为不可写场景提供用户可见诊断；将 SQLite 连接隔离到 actor/串行执行器，补账号隔离、迁移失败和缓存清理测试。
 
-**验收**：边界分值 0.819/0.82/0.949/0.95 有明确决策；同一标题下多查询候选统一排序；错误候选不会在 `MediaLibraryScreen` 内绕过策略写库；重新扫描不会把用户已确认/待确认记录降级或覆盖。
+### 10 月 18 日收尾顺序
 
-### 方案五：数据库职责与生命周期显式化
+先完成上述五项的代码边界和自动化回归，再让另一位开发者接手 10 月 19 日的两个独立任务。两组工作不得同时修改 `PlayerScreen`、媒体库模型或同一测试夹具；当前分支完成后先做代码审查和验证，再以稳定提交作为外部开发者的基线。
 
-**要解决的问题**：观看历史和媒体目录数据库目前放在 tvOS `Caches`，系统可以清理；SQLite repository 又同步运行在 `MainActor`，播放进度定期保存时会占用 UI 执行上下文。
+---
 
-**拟调整**：
+## 🧾 Codex follow-up：10 月 19 日当前工作树实现与外部交接（2026-10-19）
 
-* 在 `QuarkTheater/App/QuarkTheaterApp.swift` 抽出 `StoragePaths`/依赖容器：观看历史、用户确认匹配、别名学习等用户期望保留的数据移至 `Application Support`；可重建的临时扫描快照/图片才放 `Caches`。
-* 新增数据库路径迁移：首次启动时检测旧 Caches DB，复制/迁移到新位置并校验 schema 与关键记录数量；只有新库成功打开、校验后才标记迁移完成。失败时保留旧库并让诊断界面报告错误，绝不静默清空。
-* `HistoryRepository`、`MediaCatalogRepository` 改由各自 actor 或一个串行数据库执行器独占 SQLite 连接；对 UI 暴露异步 API。进度保存采用节流/合并写入，停止播放和切账号时再 flush，避免每次状态回调都同步写磁盘。
-* 对账号隔离键、文件 ID、schema 版本和迁移回滚增加 repository 测试；不在迁移中自动把不同本地账号分区合并。
+> 这是当前本地未提交工作树的事实记录，不是“已合并/已发布”声明。当前改动未在本节声称 XCTest、模拟器或实体设备通过；需以实际命令退出码和产物为准。
 
-**验收**：模拟 Caches 被清空后观看历史和用户确认刮削仍保留；从旧库升级时行数/账号隔离通过核对；数据库故障可见且旧数据可恢复；播放时的定时写入不造成明显焦点迟滞。
+### 当前工作树已实现的改动（待验证）
 
-### 推荐落地顺序与范围控制
+* 播放可靠性：`PlaybackCoordinator.swift` 增加播放请求 generation、待切换文件校验、切集前暂停旧播放器、资源/当前文件一致性检查、音轨与音频路由心跳诊断；`PlayerScreen.swift`/`PlayerInputReducer.swift` 调整抽屉焦点与横向移动职责，避免一次遥控事件被处理两次。
+* 刮削与播放队列：`FilenameParser.swift` 支持“剧名+第四季/第 4 季/S04”目录；`MediaLibrarySyncService.swift` 对缺少集数的剧集停止自动重匹配并留在待确认；`MediaItemDetailScreen.swift` 使用“未分季/待确认集数”，不再把未知集数伪装成第 1 集；多个队列投影限制跨影片、跨季和未确认文件串播。
+* 日志与诊断：`DiagnosticsStore.swift` 增加播放器引擎、音画同步偏差、丢帧、焦点序号、集数序号等受限字段；`LiveQuarkClient.swift` 将播放请求 correlation ID 贯穿到 `/file/v2/play`；`PlaybackProbeCookieTests.swift` 和 `CodexUpdateTests.swift` 增加脱敏、资源代际、切集和队列相关测试。
+* 网盘/页面安全性：`FileBrowserScreen.swift`、`MediaItemDetailScreen.swift`、`MediaLibraryScreen.swift`、`Models.swift` 对未确认元数据、文件名显示和电影快速播放做了保护性调整；这些改动仍需结合完整构建检查潜在回归。
 
-1. **先锁行为**：给扫描触发/取消、玩家输入 reducer、刮削策略分别补纯逻辑与集成测试；确认当前的实测症状和回归基线。
-2. **先修两个用户可感知的阻塞点**：扫描 single-flight + 非 MainActor 数据处理；播放器单一遥控器事件入口 + 唯一焦点目标 + KSPlayer seek/play/pause。
-3. **再拆职责**：引入 `MediaLibraryViewModel` 和 `MediaLibrarySyncService`，把现有页面迁移成薄视图；不同时重写无关的登录、网盘客户端或所有 UI。
-4. **统一匹配与播放模型**：集中 `MatchDecisionPolicy`，TMDB 多候选统一评分；稳定作品、季集和文件版本的关系。
-5. **最后迁移数据与清理双引擎**：先做 Application Support 数据迁移和回滚验证；KSPlayer 真机通过验收后再删除 AVPlayer 路径。
-6. **更新架构文档**：同步 `docs/ARCHITECTURE.md`、`PROJECT_HANDOVER.md` 和 `docs/KNOWN-ISSUES.md`，删除“焦点陷阱已彻底解决”“播放器仅 AVPlayer”等过时描述；每条写明已验证平台和未验证边界。
+### 10 月 19 日仍只是计划或未完成的内容
 
-**总体验收门槛**：五个边界都有自动化测试；tvOS 27 模拟器能完成扫描、确认匹配、播放/暂停/快进快退、抽屉导航和数据迁移；“主卧” Apple TV 完成同一套人工遥控器与真实云盘回归；没有经过设备验证的行为继续标为待验收，不提前宣称完成。
+* 五项架构收敛本身尚未完成，尤其是 ViewModel 唯一入口、后台数据库执行器、播放器引擎协议/适配器和完整 MatchPipeline。
+* 诊断字段已扩展，但“日志导出在所有失败场景下给用户明确错误”的端到端验收尚未完成。
+* KSPlayer 单引擎迁移、10/15 秒设置在真机三种遥控器上的验证、静音根因确认、HDR/SDR 轨道读取均不能从当前 diff 推断为完成。
+* 当前没有证据表明本工作树已经完成 Xcode 27 模拟器 XCTest 或“主卧”真实播放回归；外部开发者接手前必须重新运行并记录命令、退出码和限制。
+
+### 外部开发者的两个任务（五项架构收敛完成后再开始）
+
+#### A. 播放器焦点 / 遥控器 UI 测试
+
+按 [Player Focus UI Test Handoff Plan](docs/superpowers/plans/2026-10-19-player-focus-ui-test-handoff.md) 实现真实 `PlayerScreen` 焦点树测试：抽屉内左右单步移动不触发 seek、提示消失后按下可打开抽屉、抽屉外设置跳转、播放/暂停。使用确定性测试播放会话，不访问真实网盘。若再次出现 `DTServiceHubClient failed to bless service hub`，只能报告构建结果，不能报告 XCTest 通过。
+
+#### B. 选集抽屉按集显示 TMDB still
+
+按 [Per-Episode Artwork Handoff Plan](docs/superpowers/plans/2026-10-19-episode-artwork-handoff.md) 实现每个剧集/季最多一次季详情请求，按可靠集号映射 `still_path`；优先已确认元数据，集号缺失时不猜，图片不可用时回退背景图/占位图。不改媒体目录数据库结构。
+
+### 交接顺序与责任
+
+1. 当前开发者先完成五项架构收敛，提交代码、测试和未验证边界；不得与外部开发者并行修改共享文件。
+2. 代码审查确认稳定后，把该提交作为外部开发者基线；外部开发者只负责 A/B 两项，另开分支，不操作实体 Apple TV，不合并或推送 `main`。
+3. 外部开发者回传分支名、提交 hash、改动文件、构建/测试命令与退出码、`xcresult` 摘要、缩略图截图及失败限制；主开发者再统一审查、合并和设备验证。

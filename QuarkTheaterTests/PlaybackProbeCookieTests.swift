@@ -98,6 +98,63 @@ final class PlaybackProbeCookieTests: XCTestCase {
         XCTAssertEqual(filtered["User-Agent"], "fixture")
     }
 
+    func testPlaybackDiagnosticsExposeEngineAndAVSyncWithoutSensitiveIdentity() {
+        let metadata: [DiagnosticMetadata] = [
+            .playerEngine(.ksAVPlayer), .avSyncDeltaMilliseconds(-42), .droppedFrames(3),
+            .focusOrdinal(2), .episodeOrdinal(4)
+        ]
+        let sanitized = DiagnosticMetadata.sanitizedForTesting(metadata)
+        XCTAssertEqual(sanitized["playerEngine"], .string("ks_av_player"))
+        XCTAssertEqual(sanitized["avSyncDeltaMs"], .double(-42))
+        XCTAssertEqual(sanitized["droppedFrames"], .int(3))
+        XCTAssertEqual(sanitized["focusOrdinal"], .int(2))
+        XCTAssertEqual(sanitized["episodeOrdinal"], .int(4))
+        XCTAssertFalse(sanitized.keys.contains { $0.lowercased().contains("file") })
+        XCTAssertFalse(sanitized.keys.contains { $0.lowercased().contains("url") })
+    }
+
+    @MainActor
+    func testPlaybackHeartbeatEligibilityIsBoundedAndStateDriven() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        XCTAssertFalse(PlaybackCoordinator.shouldEmitPlaybackHeartbeat(
+            now: t0.addingTimeInterval(14), lastSampleDate: t0,
+            state: .playing, lastState: .playing,
+            audioTrackChanged: false, audioRouteChanged: false
+        ))
+        XCTAssertTrue(PlaybackCoordinator.shouldEmitPlaybackHeartbeat(
+            now: t0.addingTimeInterval(15), lastSampleDate: t0,
+            state: .playing, lastState: .playing,
+            audioTrackChanged: false, audioRouteChanged: false
+        ))
+        XCTAssertTrue(PlaybackCoordinator.shouldEmitPlaybackHeartbeat(
+            now: t0.addingTimeInterval(1), lastSampleDate: t0,
+            state: .playing, lastState: .playing,
+            audioTrackChanged: true, audioRouteChanged: false
+        ))
+        XCTAssertTrue(PlaybackCoordinator.shouldEmitPlaybackHeartbeat(
+            now: t0.addingTimeInterval(1), lastSampleDate: t0,
+            state: .paused, lastState: .playing,
+            audioTrackChanged: false, audioRouteChanged: false
+        ))
+        XCTAssertFalse(PlaybackCoordinator.shouldEmitPlaybackHeartbeat(
+            now: t0.addingTimeInterval(60), lastSampleDate: t0,
+            state: .paused, lastState: .paused,
+            audioTrackChanged: false, audioRouteChanged: false
+        ))
+    }
+
+    @MainActor
+    func testPlaybackHeartbeatStartIsIdempotentWhileTaskIsActive() {
+        XCTAssertFalse(PlaybackCoordinator.shouldKeepExistingPlaybackHeartbeat(isTaskActive: false))
+        XCTAssertTrue(PlaybackCoordinator.shouldKeepExistingPlaybackHeartbeat(isTaskActive: true))
+    }
+
+    @MainActor
+    func testPlaybackSessionTransitionResetsHeartbeatOnlyForMountedPlayer() {
+        XCTAssertTrue(PlaybackCoordinator.shouldResetPlaybackHeartbeatForSessionTransition(hasActivePlayer: true))
+        XCTAssertFalse(PlaybackCoordinator.shouldResetPlaybackHeartbeatForSessionTransition(hasActivePlayer: false))
+    }
+
     @MainActor
     func testKSPlayerTrackSnapshotOnlyChangesWhenTracksOrSelectionChanges() {
         XCTAssertTrue(PlaybackCoordinator.ksTrackSnapshotChanged(previousIDs: [], currentIDs: [1], previousSelected: nil, currentSelected: nil))

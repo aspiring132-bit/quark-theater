@@ -172,6 +172,12 @@ enum DiagnosticAudioRoute: String, CaseIterable, Sendable {
     case unknown
 }
 
+enum DiagnosticPlayerEngine: String, CaseIterable, Sendable {
+    case ksAVPlayer = "ks_av_player"
+    case ksMEPlayer = "ks_me_player"
+    case unknown
+}
+
 /// Closed set of app-level focus destinations. Never persist labels, IDs, or view-local tokens.
 enum DiagnosticFocusTarget: String, CaseIterable, Sendable {
     case media
@@ -256,6 +262,11 @@ enum DiagnosticMetadata: Hashable, Sendable {
     case confidenceBucket(DiagnosticConfidenceBucket)
     case aliasProvenance(DiagnosticAliasProvenance)
     case focusTarget(DiagnosticFocusTarget)
+    case playerEngine(DiagnosticPlayerEngine)
+    case avSyncDeltaMilliseconds(Double)
+    case droppedFrames(Int)
+    case focusOrdinal(Int)
+    case episodeOrdinal(Int)
 
     fileprivate var persistedEntry: (key: String, value: DiagnosticValue)? {
         switch self {
@@ -313,10 +324,26 @@ enum DiagnosticMetadata: Hashable, Sendable {
             return ("aliasProvenance", .string(value.rawValue))
         case .focusTarget(let value):
             return ("focusTarget", .string(value.rawValue))
+        case .playerEngine(let value):
+            return ("playerEngine", .string(value.rawValue))
+        case .avSyncDeltaMilliseconds(let value) where value.isFinite && (-60_000...60_000).contains(value):
+            return ("avSyncDeltaMs", .double(value))
+        case .droppedFrames(let value) where (0...10_000_000).contains(value):
+            return ("droppedFrames", .int(value))
+        case .focusOrdinal(let value) where (0...10_000).contains(value):
+            return ("focusOrdinal", .int(value))
+        case .episodeOrdinal(let value) where (0...10_000).contains(value):
+            return ("episodeOrdinal", .int(value))
         default:
             return nil
         }
     }
+
+    #if DEBUG
+    static func sanitizedForTesting(_ metadata: [DiagnosticMetadata]) -> [String: DiagnosticValue] {
+        sanitize(metadata)
+    }
+    #endif
 
     fileprivate static func sanitize(_ metadata: [DiagnosticMetadata]) -> [String: DiagnosticValue] {
         metadata.reduce(into: [:]) { result, field in
@@ -383,6 +410,14 @@ enum DiagnosticMetadata: Hashable, Sendable {
         case ("aliasProvenance", .string(let raw)) where DiagnosticAliasProvenance(rawValue: raw) != nil:
             return value
         case ("focusTarget", .string(let raw)) where DiagnosticFocusTarget(rawValue: raw) != nil:
+            return value
+        case ("playerEngine", .string(let raw)) where DiagnosticPlayerEngine(rawValue: raw) != nil:
+            return value
+        case ("avSyncDeltaMs", .double(let number)) where number.isFinite && (-60_000...60_000).contains(number):
+            return value
+        case ("droppedFrames", .int(let number)) where (0...10_000_000).contains(number):
+            return value
+        case ("focusOrdinal", .int(let number)), ("episodeOrdinal", .int(let number)) where (0...10_000).contains(number):
             return value
         default:
             return nil

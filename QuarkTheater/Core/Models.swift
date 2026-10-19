@@ -155,6 +155,26 @@ struct MediaItem: Codable, Identifiable {
     }
 }
 
+/// Canonical season/episode projection used by library and detail queues.
+/// Confirmed catalog metadata wins over filename parsing; an unknown episode
+/// remains unknown instead of being coerced to episode 1.
+enum EpisodeMetadataProjection {
+    static func project(metadata: MediaItem, parsed: ParsedMediaName) -> ParsedMediaName {
+        ParsedMediaName(title: parsed.title, year: parsed.year ?? metadata.year,
+                        mediaType: parsed.mediaType, seasonNumber: metadata.seasonNumber ?? parsed.seasonNumber,
+                        // A confirmed catalog row is authoritative even when its
+                        // episode number is deliberately unknown. Falling back to
+                        // a filename's E01 would incorrectly make it autoplayable.
+                        episodeNumber: metadata.episodeNumber,
+                        inferredFromParent: parsed.inferredFromParent,
+                        unresolvedReason: parsed.unresolvedReason)
+    }
+
+    static func displayEpisodeNumber(_ parsed: ParsedMediaName) -> Int? {
+        parsed.episodeNumber
+    }
+}
+
 struct Episode: Codable, Identifiable {
     let id: String
     let mediaId: String

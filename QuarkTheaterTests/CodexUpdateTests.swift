@@ -112,9 +112,9 @@ final class CodexUpdateTests: XCTestCase {
         let leftAction = PlayerInputReducer.reduce(state: state, direction: .left, seekInterval: 10)
         XCTAssertEqual(leftAction, .none)
 
-        // Right from 选集 moves to 字幕
+        // Horizontal movement is owned by the tvOS focus engine.
         let rightAction = PlayerInputReducer.reduce(state: state, direction: .right, seekInterval: 15)
-        XCTAssertEqual(rightAction, .focusTarget(.drawerTab("字幕")))
+        XCTAssertEqual(rightAction, .none)
 
         // Up arrow does NOT close drawer (Requirement: only back/menu key closes drawer)
         let upAction = PlayerInputReducer.reduce(state: state, direction: .up, seekInterval: 10)
@@ -137,11 +137,330 @@ final class CodexUpdateTests: XCTestCase {
             audioTrackIDs: ["0"]
         )
         let nextEpAction = PlayerInputReducer.reduce(state: contentState, direction: .right, seekInterval: 10)
-        XCTAssertEqual(nextEpAction, .focusTarget(.episode("ep1")))
+        XCTAssertEqual(nextEpAction, .none)
 
         // Up from content returns to tab
         let upFromContent = PlayerInputReducer.reduce(state: contentState, direction: .up, seekInterval: 10)
         XCTAssertEqual(upFromContent, .focusTarget(.drawerTab("选集")))
+    }
+
+    func testPlayerInputReducerLeavesDrawerHorizontalMovementToSingleFocusOwner() {
+        let state = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: .episode("ep2"),
+            canPlayNext: false,
+            currentPlaybackTime: 100,
+            duration: 3600,
+            episodeFileIDs: ["ep1", "ep2", "ep3"]
+        )
+
+        XCTAssertEqual(
+            PlayerInputReducer.reduce(state: state, direction: .left, seekInterval: 10),
+            .none
+        )
+        XCTAssertEqual(
+            PlayerInputReducer.reduce(state: state, direction: .right, seekInterval: 10),
+            .none
+        )
+    }
+
+    func testEpisodeMetadataProjectionPrefersConfirmedValuesAndLeavesUnknownUnresolved() {
+        let parsed = ParsedMediaName(title: "Show", mediaType: .series,
+                                     seasonNumber: 1, episodeNumber: 1, inferredFromParent: false)
+        let confirmed = MediaItem(id: "m", fileId: "f", mediaType: .series,
+                                  title: "Show", seasonNumber: 2, episodeNumber: 7)
+        let projected = EpisodeMetadataProjection.project(metadata: confirmed, parsed: parsed)
+        XCTAssertEqual(projected.seasonNumber, 2)
+        XCTAssertEqual(projected.episodeNumber, 7)
+
+        let unresolved = MediaItem(id: "u", fileId: "u", mediaType: .series,
+                                   title: "Show", seasonNumber: 2, episodeNumber: nil)
+        let unresolvedProjection = EpisodeMetadataProjection.project(
+            metadata: unresolved,
+            parsed: ParsedMediaName(title: "Show", mediaType: .series,
+                                    seasonNumber: 2, episodeNumber: nil, inferredFromParent: true)
+        )
+        XCTAssertNil(unresolvedProjection.episodeNumber)
+        XCTAssertEqual(EpisodeMetadataProjection.displayEpisodeNumber(unresolvedProjection), nil)
+    }
+
+    func testConfirmedUnknownEpisodeDoesNotFallBackToFilenameEpisode() {
+        let confirmed = MediaItem(id: "u", fileId: "u", mediaType: .series,
+                                  title: "Show", seasonNumber: 2, episodeNumber: nil)
+        let parsed = ParsedMediaName(title: "Show", mediaType: .series,
+                                     seasonNumber: 2, episodeNumber: 1,
+                                     inferredFromParent: false)
+
+        let projected = EpisodeMetadataProjection.project(metadata: confirmed, parsed: parsed)
+
+        XCTAssertNil(projected.episodeNumber)
+    }
+
+    func testMovieQuickPlayUsesTheSelectedMediaItemFileAsSingleFileQueue() {
+        let movie = MediaItem(id: "movie", fileId: "movie-preferred", mediaType: .movie,
+                              title: "Movie")
+        let preferred = CloudFile(fileId: "movie-preferred", parentId: "movies", name: "Movie.mp4",
+                                  size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let alternate = CloudFile(fileId: "movie-alternate", parentId: "movies", name: "Movie HDR.mp4",
+                                  size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+
+        let projection = MediaLibraryPlaybackProjection.quickPlay(item: movie, episodes: [
+            (movie, alternate, ParsedMediaName(title: "Movie", mediaType: .movie)),
+            (movie, preferred, ParsedMediaName(title: "Movie", mediaType: .movie))
+        ])
+
+        XCTAssertEqual(projection?.selected.fileId, "movie-preferred")
+        XCTAssertEqual(projection?.queue.map(\.fileId), ["movie-preferred"])
+    }
+
+    func testSeriesQuickPlayStillRequiresKnownEpisodeNumbers() {
+        let show = MediaItem(id: "show", fileId: "show-unknown", mediaType: .series,
+                             title: "Show")
+        let unknown = CloudFile(fileId: "show-unknown", parentId: "show", name: "KAPI.mp4",
+                                size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+
+        XCTAssertNil(MediaLibraryPlaybackProjection.quickPlay(item: show, episodes: [
+            (show, unknown, ParsedMediaName(title: "Show", mediaType: .series,
+                                            episodeNumber: nil, unresolvedReason: .missingSeriesContext))
+        ]))
+    }
+
+    func testSubtitleResourceURLUsesTheVerifiedPlaybackURL() throws {
+        let resourceURL = try XCTUnwrap(URL(string: "https://cdn.example.test/video.m3u8"))
+        XCTAssertEqual(PlaybackCoordinator.subtitleResourceURL(for: resourceURL), resourceURL)
+    }
+
+    @MainActor
+    func testPlaybackResourceMustMatchPendingSelectionAndGeneration() {
+        XCTAssertTrue(PlaybackCoordinator.shouldAcceptPlaybackResource(
+            requestGeneration: 3, currentGeneration: 3,
+            requestedFileID: "episode-a", currentFileID: "episode-a",
+            resourceFileID: "episode-a", isCancelled: false
+        ))
+        XCTAssertFalse(PlaybackCoordinator.shouldAcceptPlaybackResource(
+            requestGeneration: 3, currentGeneration: 4,
+            requestedFileID: "episode-a", currentFileID: "episode-b",
+            resourceFileID: "episode-a", isCancelled: false
+        ))
+        XCTAssertFalse(PlaybackCoordinator.shouldAcceptPlaybackResource(
+            requestGeneration: 3, currentGeneration: 3,
+            requestedFileID: "episode-a", currentFileID: "episode-a",
+            resourceFileID: "episode-b", isCancelled: false
+        ))
+    }
+
+    @MainActor
+    func testEpisodeReplacementPausesOnlyWhenSwitchingFromAnActiveFile() {
+        XCTAssertEqual(
+            PlaybackCoordinator.replacementAction(hasActivePlayer: true, isNewFile: true),
+            .pauseAndPlay
+        )
+        XCTAssertEqual(
+            PlaybackCoordinator.replacementAction(hasActivePlayer: false, isNewFile: true),
+            .startNormally
+        )
+        XCTAssertEqual(
+            PlaybackCoordinator.replacementAction(hasActivePlayer: true, isNewFile: false),
+            .startNormally
+        )
+        XCTAssertTrue(PlaybackCoordinator.shouldPausePlayerBeforeReplacement(
+            hasActivePlayer: true, isNewFile: true
+        ))
+        XCTAssertFalse(PlaybackCoordinator.shouldPausePlayerBeforeReplacement(
+            hasActivePlayer: false, isNewFile: true
+        ))
+        XCTAssertFalse(PlaybackCoordinator.shouldPausePlayerBeforeReplacement(
+            hasActivePlayer: true, isNewFile: false
+        ))
+    }
+
+    func testSameCurrentFileWithoutPendingReplacementDoesNotPause() {
+        XCTAssertFalse(PlaybackCoordinator.isNewPlaybackFile(
+            targetFileID: "episode-a", currentFileID: "episode-a", pendingFileID: nil
+        ))
+        XCTAssertFalse(PlaybackCoordinator.shouldPausePlayerBeforeReplacement(
+            hasActivePlayer: true,
+            isNewFile: PlaybackCoordinator.isNewPlaybackFile(
+                targetFileID: "episode-a", currentFileID: "episode-a", pendingFileID: nil
+            )
+        ))
+    }
+
+    func testSyncPolicyLeavesUnparsedSeriesInManualConfirmation() {
+        let unresolved = ScannedMediaCandidate(
+            file: CloudFile(fileId: "unknown", parentId: "show", name: "KAPI.mp4", size: 0,
+                            fileExtension: "mp4", modifiedAt: nil, isDirectory: false),
+            parsedName: ParsedMediaName(title: "Show", mediaType: .series, seasonNumber: 1,
+                                        episodeNumber: nil, unresolvedReason: .missingSeriesContext)
+        )
+        let movie = ScannedMediaCandidate(
+            file: CloudFile(fileId: "movie", parentId: "movies", name: "Movie.mp4", size: 0,
+                            fileExtension: "mp4", modifiedAt: nil, isDirectory: false),
+            parsedName: ParsedMediaName(title: "Movie", mediaType: .movie)
+        )
+
+        XCTAssertFalse(MediaLibrarySyncPolicy.shouldAutoRematch(candidate: unresolved, isConfirmed: false))
+        XCTAssertTrue(MediaLibrarySyncPolicy.needsManualConfirmation(candidate: unresolved, isConfirmed: false))
+        XCTAssertTrue(MediaLibrarySyncPolicy.shouldAutoRematch(candidate: movie, isConfirmed: false))
+        XCTAssertFalse(MediaLibrarySyncPolicy.needsManualConfirmation(candidate: movie, isConfirmed: false))
+        XCTAssertFalse(MediaLibrarySyncPolicy.shouldAutoRematch(candidate: unresolved, isConfirmed: true))
+        XCTAssertFalse(MediaLibrarySyncPolicy.needsManualConfirmation(candidate: unresolved, isConfirmed: true))
+    }
+
+    func testPlaybackQueueUsesNaturalEpisodeOrder() {
+        let files = [
+            CloudFile(fileId: "10", parentId: "s1", name: "10.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false),
+            CloudFile(fileId: "2", parentId: "s1", name: "2.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false),
+            CloudFile(fileId: "1", parentId: "s1", name: "1.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        ]
+        let metadata = Dictionary(uniqueKeysWithValues: files.map {
+            ($0.fileId, ParsedMediaName(title: "Show", mediaType: .series,
+                                        seasonNumber: 1, episodeNumber: Int($0.fileId)))
+        })
+        XCTAssertEqual(PlaybackQueueProjection.sort(files, metadata: metadata).map(\.fileId), ["1", "2", "10"])
+    }
+
+    func testPlaybackQueueKeepsConfirmedMetadataAndIsolatesUnresolvedFiles() {
+        let confirmed = CloudFile(fileId: "confirmed", parentId: "s1", name: "old-name.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let unresolved = CloudFile(fileId: "unknown", parentId: "s1", name: "KAPI_26-07-11_064912.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let metadata = [
+            confirmed.fileId: ParsedMediaName(title: "Show", mediaType: .series, seasonNumber: 1, episodeNumber: 5),
+            unresolved.fileId: ParsedMediaName(title: "Show", mediaType: .series, seasonNumber: 1, episodeNumber: nil, unresolvedReason: .missingSeriesContext)
+        ]
+        XCTAssertEqual(PlaybackQueueProjection.automaticFiles([unresolved, confirmed], metadata: metadata).map(\.fileId), ["confirmed"])
+        XCTAssertEqual(metadata[confirmed.fileId]?.episodeNumber, 5)
+        XCTAssertNil(metadata[unresolved.fileId]?.episodeNumber)
+    }
+
+    func testDirectQueueUsesConfirmedEpisodeOverStaleFilenameParse() {
+        let file = CloudFile(fileId: "confirmed", parentId: "show", name: "01.mp4", size: 0,
+                             fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let projected = ParsedMediaName(title: "Show", mediaType: .series,
+                                        seasonNumber: 1, episodeNumber: 5)
+        XCTAssertEqual(
+            PlaybackQueueProjection.directQueue(files: [file], selected: file,
+                                                metadata: [file.fileId: projected]).map(\.fileId),
+            ["confirmed"]
+        )
+    }
+
+    func testDirectQueueRestrictsConfirmedSeriesAndSeason() {
+        func file(_ id: String) -> CloudFile {
+            CloudFile(fileId: id, parentId: "mixed", name: "\(id).mp4", size: 0,
+                      fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        }
+        let selected = file("s1e1")
+        let sameSeason = file("s1e2")
+        let otherSeason = file("s2e1")
+        let otherShow = file("other-s1e1")
+        let files = [selected, sameSeason, otherSeason, otherShow]
+        let metadata = Dictionary(uniqueKeysWithValues: files.map {
+            ($0.fileId, ParsedMediaName(title: "Parsed", mediaType: .series,
+                                        seasonNumber: $0.fileId == "s2e1" ? 2 : 1,
+                                        episodeNumber: 1))
+        })
+        let confirmed = [
+            "s1e1": MediaItem(id: "a", fileId: "s1e1", mediaType: .series, title: "Show A", tmdbId: 100, seasonNumber: 1, episodeNumber: 1),
+            "s1e2": MediaItem(id: "b", fileId: "s1e2", mediaType: .series, title: "Show A", tmdbId: 100, seasonNumber: 1, episodeNumber: 2),
+            "s2e1": MediaItem(id: "c", fileId: "s2e1", mediaType: .series, title: "Show A", tmdbId: 100, seasonNumber: 2, episodeNumber: 1),
+            "other-s1e1": MediaItem(id: "d", fileId: "other-s1e1", mediaType: .series, title: "Show B", tmdbId: 200, seasonNumber: 1, episodeNumber: 1)
+        ]
+        XCTAssertEqual(
+            PlaybackQueueProjection.directQueue(files: files, selected: selected, metadata: metadata, confirmed: confirmed).map(\.fileId),
+            ["s1e1", "s1e2"]
+        )
+    }
+
+    func testDirectQueueDoesNotMixParsedSeriesWhenCatalogIsUnavailable() {
+        let selected = CloudFile(fileId: "show-a-1", parentId: "mixed", name: "A-01.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let sameShow = CloudFile(fileId: "show-a-2", parentId: "mixed", name: "A-02.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let otherShow = CloudFile(fileId: "show-b-1", parentId: "mixed", name: "B-01.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let metadata = [
+            "show-a-1": ParsedMediaName(title: "Show A", mediaType: .series, episodeNumber: 1),
+            "show-a-2": ParsedMediaName(title: "Show A", mediaType: .series, episodeNumber: 2),
+            "show-b-1": ParsedMediaName(title: "Show B", mediaType: .series, episodeNumber: 1)
+        ]
+        XCTAssertEqual(
+            PlaybackQueueProjection.directQueue(files: [selected, sameShow, otherShow], selected: selected, metadata: metadata).map(\.fileId),
+            ["show-a-1", "show-a-2"]
+        )
+    }
+
+    func testDirectQueueDoesNotMixDifferentParsedSeriesWithSameSeason() {
+        let selected = CloudFile(fileId: "show-a-s1e1", parentId: "mixed", name: "Show A S01E01.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let sameShow = CloudFile(fileId: "show-a-s1e2", parentId: "mixed", name: "Show A S01E02.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let otherShow = CloudFile(fileId: "show-b-s1e1", parentId: "mixed", name: "Show B S01E01.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let metadata = [
+            selected.fileId: ParsedMediaName(title: "Show A", mediaType: .series, seasonNumber: 1, episodeNumber: 1),
+            sameShow.fileId: ParsedMediaName(title: "Show A", mediaType: .series, seasonNumber: 1, episodeNumber: 2),
+            otherShow.fileId: ParsedMediaName(title: "Show B", mediaType: .series, seasonNumber: 1, episodeNumber: 1)
+        ]
+        XCTAssertEqual(
+            PlaybackQueueProjection.directQueue(files: [selected, sameShow, otherShow], selected: selected, metadata: metadata).map(\.fileId),
+            ["show-a-s1e1", "show-a-s1e2"]
+        )
+    }
+
+    func testDirectQueueFallsBackToSelectedWhenSeasonHasNoSeriesTitleContext() {
+        let selected = CloudFile(fileId: "selected", parentId: "mixed", name: "01.mp4", size: 0,
+                                 fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let other = CloudFile(fileId: "other", parentId: "mixed", name: "Other 01.mp4", size: 0,
+                              fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+
+        let emptyTitle = ParsedMediaName(title: "", mediaType: .series, seasonNumber: 1, episodeNumber: 1)
+        let metadata = [
+            selected.fileId: emptyTitle,
+            other.fileId: ParsedMediaName(title: "Other Show", mediaType: .series,
+                                          seasonNumber: 1, episodeNumber: 2)
+        ]
+
+        XCTAssertEqual(
+            PlaybackQueueProjection.directQueue(files: [selected, other], selected: selected,
+                                                metadata: metadata).map(\.fileId),
+            ["selected"]
+        )
+    }
+
+    func testDirectQueueFallsBackToSelectedForUnknownMediaTypeEvenWithSeason() {
+        let selected = CloudFile(fileId: "selected-unknown", parentId: "mixed", name: "01.mp4", size: 0,
+                                 fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let other = CloudFile(fileId: "other-series", parentId: "mixed", name: "Other 01.mp4", size: 0,
+                              fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+
+        let metadata = [
+            selected.fileId: ParsedMediaName(title: "", mediaType: .unknown, seasonNumber: 1, episodeNumber: 1),
+            other.fileId: ParsedMediaName(title: "Other Show", mediaType: .series,
+                                          seasonNumber: 1, episodeNumber: 2)
+        ]
+
+        XCTAssertEqual(
+            PlaybackQueueProjection.directQueue(files: [selected, other], selected: selected,
+                                                metadata: metadata).map(\.fileId),
+            ["selected-unknown"]
+        )
+    }
+
+    @MainActor
+    func testDetailPlaybackQueueIsolatesUnresolvedManualSelection() {
+        let known = MediaItem(id: "known", fileId: "known", mediaType: .series, title: "Show", seasonNumber: 1, episodeNumber: 2)
+        let unknown = MediaItem(id: "unknown", fileId: "unknown", mediaType: .series, title: "Show", seasonNumber: 1, episodeNumber: nil)
+        let knownFile = CloudFile(fileId: "known", parentId: "s1", name: "02.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let unknownFile = CloudFile(fileId: "unknown", parentId: "s1", name: "KAPI.mp4", size: 0, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let episodes: [(MediaItem, CloudFile, ParsedMediaName)] = [
+            (known, knownFile, ParsedMediaName(title: "Show", mediaType: .series, seasonNumber: 1, episodeNumber: 2)),
+            (unknown, unknownFile, ParsedMediaName(title: "Show", mediaType: .series, seasonNumber: 1, episodeNumber: nil, unresolvedReason: .missingSeriesContext))
+        ]
+        XCTAssertEqual(MediaItemDetailScreen.playbackQueue(for: unknownFile, episodes: episodes).map(\.fileId), ["unknown"])
+        XCTAssertEqual(MediaItemDetailScreen.playbackQueue(for: knownFile, episodes: episodes).map(\.fileId), ["known"])
+    }
+
+    func testReducerProjectsNativeDrawerTabFocusToSelectedTab() {
+        XCTAssertEqual(
+            PlayerInputReducer.selectedTabName(for: .drawerTab("字幕")),
+            "字幕"
+        )
+        XCTAssertNil(PlayerInputReducer.selectedTabName(for: .episode("episode-a")))
     }
 
     // MARK: - 5. PlaybackPreferences

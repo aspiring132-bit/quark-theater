@@ -25,6 +25,14 @@ struct PlayerInputState: Equatable {
 enum PlayerInputReducer {
     static let orderedTabs = ["选集", "字幕", "音轨"]
 
+    /// Projects native tvOS focus changes back into the drawer's selected-tab
+    /// state without issuing another focus movement.
+    static func selectedTabName(for target: PlayerFocusTarget?) -> String? {
+        guard case .drawerTab(let name) = target,
+              orderedTabs.contains(name) else { return nil }
+        return name
+    }
+
     static func reduce(state: PlayerInputState, direction: MoveCommandDirection, seekInterval: Int) -> PlayerRemoteAction {
         switch direction {
         case .down:
@@ -58,21 +66,16 @@ enum PlayerInputReducer {
             if !state.isDrawerOpen {
                 return .seek(direction: .backward, interval: PlayerSeekMath.normalizedInterval(seekInterval))
             }
-            if isTabLevel(state.focusedTarget) {
-                return navigateTab(current: state.focusedTarget, direction: -1)
-            } else {
-                return navigateContent(state: state, step: -1)
-            }
+            // The tvOS focus engine owns horizontal movement inside the drawer.
+            // Keeping this reducer silent prevents one remote event from moving
+            // the native focus and the custom focus state a second time.
+            return .none
 
         case .right:
             if !state.isDrawerOpen {
                 return .seek(direction: .forward, interval: PlayerSeekMath.normalizedInterval(seekInterval))
             }
-            if isTabLevel(state.focusedTarget) {
-                return navigateTab(current: state.focusedTarget, direction: 1)
-            } else {
-                return navigateContent(state: state, step: 1)
-            }
+            return .none
 
         default:
             return .none

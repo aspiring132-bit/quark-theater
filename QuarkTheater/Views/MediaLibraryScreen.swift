@@ -7,6 +7,25 @@ struct RematchSheetTarget: Identifiable {
     var id: String { item.id }
 }
 
+/// Pure quick-play projection used by the hero action and unit tests. Movies
+/// never inherit a series queue: the confirmed item's file is the only file
+/// started, while series playback keeps the known-episode autoplay policy.
+enum MediaLibraryPlaybackProjection {
+    typealias Episode = (metadata: MediaItem, file: CloudFile, parsed: ParsedMediaName)
+
+    static func quickPlay(item: MediaItem, episodes: [Episode]) -> (queue: [CloudFile], selected: CloudFile)? {
+        if item.mediaType == .movie {
+            guard let selected = episodes.first(where: { $0.file.fileId == item.fileId })?.file
+                    ?? episodes.first?.file else { return nil }
+            return ([selected], selected)
+        }
+
+        let knownEpisodes = episodes.filter { $0.parsed.episodeNumber != nil }
+        guard let selected = knownEpisodes.first?.file else { return nil }
+        return (knownEpisodes.map(\.file), selected)
+    }
+}
+
 @MainActor
 struct MediaLibraryScreen: View {
     let client: QuarkClient
@@ -30,6 +49,7 @@ struct MediaLibraryScreen: View {
     // Playback state
     @State private var playingFile: CloudFile?
     @State private var playlistQueue: [CloudFile] = []
+    @State private var playlistMetadata: [String: ParsedMediaName] = [:]
     @State private var playingBackdropURL: URL?
 
     // Modals & sheets
@@ -94,12 +114,12 @@ struct MediaLibraryScreen: View {
                 ?? ParsedMediaName(title: metadata.title, year: metadata.year, mediaType: metadata.mediaType,
                                    seasonNumber: metadata.seasonNumber, episodeNumber: metadata.episodeNumber,
                                    inferredFromParent: true)
-            return (metadata, file, parsed)
+            return (metadata, file, EpisodeMetadataProjection.project(metadata: metadata, parsed: parsed))
         }.sorted {
             if $0.2.seasonNumber != $1.2.seasonNumber {
-                return ($0.2.seasonNumber ?? 0) < ($1.2.seasonNumber ?? 0)
+                return ($0.2.seasonNumber ?? Int.max) < ($1.2.seasonNumber ?? Int.max)
             }
-            return ($0.2.episodeNumber ?? 0) < ($1.2.episodeNumber ?? 0)
+            return ($0.2.episodeNumber ?? Int.max) < ($1.2.episodeNumber ?? Int.max)
         }
     }
 
@@ -319,7 +339,7 @@ struct MediaLibraryScreen: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(candidate.parsedName.title).font(.headline)
                                         let epInfo = candidate.parsedName.mediaType == .series
-                                            ? "第 \(candidate.parsedName.seasonNumber ?? 1) 季 · 第 \(candidate.parsedName.episodeNumber ?? 1) 集"
+                                            ? "第 \(candidate.parsedName.seasonNumber ?? 1) 季 · " + (candidate.parsedName.episodeNumber.map { "第 \($0) 集" } ?? "待确认集数")
                                             : (candidate.parsedName.year.map(String.init) ?? "电影")
                                         Text("\(epInfo) · \(candidate.file.name)").font(.caption).foregroundStyle(.secondary)
                                     }
@@ -399,7 +419,8 @@ struct MediaLibraryScreen: View {
                 automaticallyPlayNext: autoPlayNextEpisode,
                 history: history,
                 diagnostics: diagnostics,
-                backdropURL: playingBackdropURL
+                backdropURL: playingBackdropURL,
+                episodeMetadataByFileID: playlistMetadata
             )
         }
         .sheet(item: $matchCandidate) { candidate in
@@ -561,10 +582,16 @@ struct MediaLibraryScreen: View {
 
                         // 1-Click Quick Play
                         Button {
-                            if let first = episodes.first {
-                                playlistQueue = episodes.map(\.1)
+                            let autoplayEpisodes = episodes.map {
+                                MediaLibraryPlaybackProjection.Episode(metadata: $0.0, file: $0.1, parsed: $0.2)
+                            }
+                            if let projection = MediaLibraryPlaybackProjection.quickPlay(item: item, episodes: autoplayEpisodes) {
+                                let selectedIDs = Set(projection.queue.map(\.fileId))
+                                let selectedEpisodes = autoplayEpisodes.filter { selectedIDs.contains($0.file.fileId) }
+                                playlistQueue = projection.queue
+                                playlistMetadata = Dictionary(uniqueKeysWithValues: selectedEpisodes.map { ($0.file.fileId, $0.parsed) })
                                 playingBackdropURL = item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
-                                playingFile = first.1
+                                playingFile = projection.selected
                             }
                         } label: {
                             HStack(spacing: 8) {
@@ -611,14 +638,17 @@ struct MediaLibraryScreen: View {
                                 HStack(spacing: 14) {
                                     ForEach(episodes.indices, id: \.self) { idx in
                                         let ep = episodes[idx]
-                                        let epNum = ep.2.episodeNumber ?? (idx + 1)
+                                        let epNum = ep.2.episodeNumber
                                         Button {
-                                            playlistQueue = episodes.map(\.1)
+                                            playlistQueue = ep.2.episodeNumber == nil
+                                                ? [ep.1]
+                                                : episodes.filter { $0.2.episodeNumber != nil }.map(\.1)
+                                            playlistMetadata = Dictionary(uniqueKeysWithValues: (ep.2.episodeNumber == nil ? [ep] : episodes.filter { $0.2.episodeNumber != nil }).map { ($0.1.fileId, $0.2) })
                                             playingBackdropURL = item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
                                             playingFile = ep.1
                                         } label: {
                                             VStack(alignment: .leading, spacing: 4) {
-                                                Text("第 \(epNum) 集")
+                                                Text(epNum.map { "第 \($0) 集" } ?? "待确认集数")
                                                     .font(.headline)
                                                 Text(ep.1.fileExtension.uppercased())
                                                     .font(.caption2)

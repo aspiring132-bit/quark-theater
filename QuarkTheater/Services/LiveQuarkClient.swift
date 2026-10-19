@@ -230,7 +230,7 @@ final class LiveQuarkClient: QuarkClient {
     }
 
     /// Resolves a short-lived dedicated video streaming or download URL on demand. The URL is not persisted as media data.
-    func playbackResource(fileID: String) async throws -> PlaybackResource {
+    func playbackResource(fileID: String, correlationID: DiagnosticCorrelationID? = nil) async throws -> PlaybackResource {
         guard account != nil else { throw QuarkError.authenticationRequired }
         guard !fileID.isEmpty, fileID != "0" else { throw QuarkError.invalidResponse("文件 ID 无效") }
 
@@ -244,7 +244,7 @@ final class LiveQuarkClient: QuarkClient {
             "resolutions": "original,4k,2k,super,high,low",
             "supports": "fmp4,hls,mp4"
         ]
-        let playbackCorrelation = diagnostics?.makeCorrelationID()
+        let playbackCorrelation = correlationID ?? diagnostics?.makeCorrelationID()
 
         if let playResult = try? await request(Self.api + "/file/v2/play", query: playQuery, body: playBody, correlationID: playbackCorrelation),
            let status = integer(playResult["status"]), status == 200,

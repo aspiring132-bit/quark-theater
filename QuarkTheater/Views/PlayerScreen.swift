@@ -15,6 +15,7 @@ struct PlayerScreen: View {
     @State private var hintDismissTask: Task<Void, Never>?
     private let diagnostics: Diagnostics
     private let backdropURL: URL?
+    private let episodeMetadataByFileID: [String: ParsedMediaName]
 
     @FocusState private var focusedTarget: PlayerFocusTarget?
 
@@ -28,9 +29,11 @@ struct PlayerScreen: View {
     init(client: QuarkClient, accountID: String, file: CloudFile,
          queue: [CloudFile] = [], automaticallyPlayNext: Bool = false,
          history: HistoryRepository, diagnostics: Diagnostics,
-         backdropURL: URL? = nil) {
+         backdropURL: URL? = nil,
+         episodeMetadataByFileID: [String: ParsedMediaName] = [:]) {
         self.diagnostics = diagnostics
         self.backdropURL = backdropURL
+        self.episodeMetadataByFileID = episodeMetadataByFileID
         _coordinator = StateObject(wrappedValue: PlaybackCoordinator(
             client: client,
             accountID: accountID,
@@ -105,7 +108,7 @@ struct PlayerScreen: View {
             }
 
             // 2. Bottom Drawer Trigger Pill (auto fades after 3s)
-            if !showDrawer && coordinator.hasActivePlayer && showHintPill {
+            if !showDrawer && coordinator.hasActivePlayer {
                 Button {
                     openDrawer()
                 } label: {
@@ -125,6 +128,10 @@ struct PlayerScreen: View {
                 }
                 .buttonStyle(.borderless)
                 .focused($focusedTarget, equals: .drawerTrigger)
+                // Keep the trigger in the focus tree after the hint fades so
+                // the next ▼ command still has a stable focus target.
+                .opacity(showHintPill ? 1 : 0)
+                .allowsHitTesting(showHintPill)
                 .padding(.bottom, 36)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
@@ -161,7 +168,24 @@ struct PlayerScreen: View {
         }
         .onDisappear { coordinator.stop() }
         .onChange(of: focusedTarget) { _, target in
-            if let target { diagnostics.recordFocusTransition(FocusDiagnostics.target(for: target)) }
+            if let target {
+                let diagnosticTarget = FocusDiagnostics.target(for: target)
+                var metadata: [DiagnosticMetadata] = [.focusTarget(diagnosticTarget)]
+                if case .episode(let fileID) = target,
+                   let ordinal = coordinator.playlistQueue.firstIndex(where: { $0.fileId == fileID }) {
+                    metadata.append(.focusOrdinal(ordinal))
+                    metadata.append(.episodeOrdinal(ordinal))
+                }
+                diagnostics.record(category: .navigation, level: .debug, event: .focusChanged,
+                                   correlationID: coordinator.playbackCorrelation,
+                                   metadata: metadata)
+            }
+            if let tabName = PlayerInputReducer.selectedTabName(for: target),
+               let tab = DrawerTab(rawValue: tabName), tab != selectedDrawerTab {
+                // Native focus is the single owner of horizontal drawer
+                // movement; synchronize state only, without moving focus.
+                selectedDrawerTab = tab
+            }
         }
         .onPlayPauseCommand {
             coordinator.togglePlayPause()
@@ -305,6 +329,7 @@ struct PlayerScreen: View {
         )
         .padding(.horizontal, 40)
         .padding(.bottom, 24)
+        .focusSection()
     }
 
     // MARK: - Tab Button (Horizontal Pill with Focus Highlight)
@@ -378,6 +403,7 @@ struct PlayerScreen: View {
                     ForEach(coordinator.playlistQueue) { file in
                         DrawerEpisodeCard(
                             file: file,
+                            parsedMetadata: episodeMetadataByFileID[file.fileId],
                             isCurrent: file.fileId == coordinator.currentPlayingFile.fileId,
                             isTargetFocused: focusedTarget == .episode(file.fileId),
                             backdropURL: backdropURL
@@ -651,9 +677,72 @@ struct PlayerScreen: View {
     }
 }
 
+/// Shared queue projection used by both direct file browsing and the matched
+/// library. Confirmed metadata wins; unresolved files remain manually playable
+/// but are excluded from automatic numbered playback.
+enum PlaybackQueueProjection {
+    static func sort(_ files: [CloudFile], metadata: [String: ParsedMediaName] = [:]) -> [CloudFile] {
+        files.sorted { lhs, rhs in
+            let lm = metadata[lhs.fileId], rm = metadata[rhs.fileId]
+            let ls = lm?.seasonNumber ?? Int.max, rs = rm?.seasonNumber ?? Int.max
+            if ls != rs { return ls < rs }
+            let le = lm?.episodeNumber ?? Int.max, re = rm?.episodeNumber ?? Int.max
+            if le != re { return le < re }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    static func automaticFiles(_ files: [CloudFile], metadata: [String: ParsedMediaName]) -> [CloudFile] {
+        sort(files.filter { metadata[$0.fileId]?.episodeNumber != nil }, metadata: metadata)
+    }
+
+    static func directQueue(files: [CloudFile], selected: CloudFile) -> [CloudFile] {
+        let videos = files.filter(\.isVideo)
+        let metadata = Dictionary(uniqueKeysWithValues: videos.map { ($0.fileId, FilenameParser.parse($0.name)) })
+        return directQueue(files: videos, selected: selected, metadata: metadata)
+    }
+
+    static func directQueue(files: [CloudFile], selected: CloudFile, metadata: [String: ParsedMediaName], confirmed: [String: MediaItem] = [:]) -> [CloudFile] {
+        let videos = files.filter(\.isVideo)
+        guard metadata[selected.fileId]?.episodeNumber != nil else { return [selected] }
+        let compatible: [CloudFile]
+        if let selectedConfirmed = confirmed[selected.fileId],
+           let tmdbID = selectedConfirmed.tmdbId,
+           let season = selectedConfirmed.seasonNumber {
+            compatible = videos.filter { file in
+                guard let item = confirmed[file.fileId] else { return false }
+                return item.tmdbId == tmdbID && item.seasonNumber == season && item.episodeNumber != nil
+            }
+        } else if let selectedMetadata = metadata[selected.fileId],
+                  let season = selectedMetadata.seasonNumber,
+                  selectedMetadata.mediaType == .series,
+                  !MediaAliasResolver.normalizeTitle(selectedMetadata.title).isEmpty {
+            let title = MediaAliasResolver.normalizeTitle(selectedMetadata.title)
+            compatible = videos.filter {
+                guard let candidate = metadata[$0.fileId], candidate.mediaType == .series else { return false }
+                return candidate.seasonNumber == season
+                    && MediaAliasResolver.normalizeTitle(candidate.title) == title
+            }
+        } else if let selectedMetadata = metadata[selected.fileId],
+                  selectedMetadata.mediaType == .series,
+                  !MediaAliasResolver.normalizeTitle(selectedMetadata.title).isEmpty {
+            let title = MediaAliasResolver.normalizeTitle(selectedMetadata.title)
+            compatible = videos.filter {
+                guard let candidate = metadata[$0.fileId], candidate.mediaType == .series else { return false }
+                return MediaAliasResolver.normalizeTitle(candidate.title) == title && candidate.seasonNumber == nil
+            }
+        } else {
+            return [selected]
+        }
+        let ordered = automaticFiles(compatible, metadata: metadata)
+        return ordered.isEmpty ? [selected] : ordered
+    }
+}
+
 // MARK: - Drawer Episode Card with Whole-Card Focus & Thumbnail Preview
 private struct DrawerEpisodeCard: View {
     let file: CloudFile
+    let parsedMetadata: ParsedMediaName?
     let isCurrent: Bool
     let isTargetFocused: Bool
     let backdropURL: URL?
@@ -666,7 +755,7 @@ private struct DrawerEpisodeCard: View {
     }
 
     private var parsed: ParsedMediaName {
-        FilenameParser.parse(file.name)
+        parsedMetadata ?? FilenameParser.parse(file.name)
     }
 
     private var cardTitle: String {

@@ -76,7 +76,7 @@ private class ContextMockQuarkClient: QuarkClient {
         return CloudFilePage(files: files, page: page, pageSize: pageSize, total: files.count)
     }
     func searchFiles(query: String, page: Int, pageSize: Int) async throws -> CloudFilePage { throw QuarkError.mockOnly }
-    func playbackResource(fileID: String) async throws -> PlaybackResource { throw QuarkError.mockOnly }
+    func playbackResource(fileID: String, correlationID: DiagnosticCorrelationID?) async throws -> PlaybackResource { throw QuarkError.mockOnly }
     func logout() async throws {}
 }
 
