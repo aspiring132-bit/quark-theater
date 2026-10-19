@@ -13,9 +13,14 @@ struct PlayerScreen: View {
     @State private var isSeeking = false
     @State private var seekDismissTask: Task<Void, Never>?
     @State private var hintDismissTask: Task<Void, Never>?
+    @State private var stillURLByFileID: [String: URL] = [:]
+    @State private var artworkLoadTask: Task<Void, Never>?
+    @State private var defaultArtworkProvider: EpisodeArtworkProvider?
     private let diagnostics: Diagnostics
     private let backdropURL: URL?
     private let episodeMetadataByFileID: [String: ParsedMediaName]
+    private let seriesTMDBId: Int?
+    private let artworkProvider: EpisodeArtworkProvider?
 
     @FocusState private var focusedTarget: PlayerFocusTarget?
 
@@ -30,10 +35,14 @@ struct PlayerScreen: View {
          queue: [CloudFile] = [], automaticallyPlayNext: Bool = false,
          history: HistoryRepository, diagnostics: Diagnostics,
          backdropURL: URL? = nil,
-         episodeMetadataByFileID: [String: ParsedMediaName] = [:]) {
+         episodeMetadataByFileID: [String: ParsedMediaName] = [:],
+         seriesTMDBId: Int? = nil,
+         artworkProvider: EpisodeArtworkProvider? = nil) {
         self.diagnostics = diagnostics
         self.backdropURL = backdropURL
         self.episodeMetadataByFileID = episodeMetadataByFileID
+        self.seriesTMDBId = seriesTMDBId
+        self.artworkProvider = artworkProvider
         _coordinator = StateObject(wrappedValue: PlaybackCoordinator(
             client: client,
             accountID: accountID,
@@ -166,7 +175,10 @@ struct PlayerScreen: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { coordinator.saveProgress() }
         }
-        .onDisappear { coordinator.stop() }
+        .onDisappear {
+            coordinator.stop()
+            artworkLoadTask?.cancel()
+        }
         .onChange(of: focusedTarget) { _, target in
             if let target {
                 let diagnosticTarget = FocusDiagnostics.target(for: target)
@@ -260,9 +272,46 @@ struct PlayerScreen: View {
             showDrawer = true
             showHintPill = false
         }
+        loadEpisodeArtwork()
         // Give a brief moment for views to appear, then set focus
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             focusedTarget = .drawerTab(selectedDrawerTab.rawValue)
+        }
+    }
+
+    // MARK: - Per-Episode Artwork
+
+    /// Resolve TMDB stills for the drawer cards. Only files whose season and
+    /// episode are both known participate (confirmed metadata first, filename
+    /// parsing as fallback — already projected by callers). One TMDB season
+    /// request is issued per season at most, and artwork never blocks
+    /// playback or focus.
+    private func loadEpisodeArtwork() {
+        artworkLoadTask?.cancel()
+        guard let seriesTMDBId else { return }
+        let provider: EpisodeArtworkProvider
+        if let artworkProvider {
+            provider = artworkProvider
+        } else {
+            // Lazily keep one provider so its season cache survives drawer
+            // open/close cycles for the whole playback session.
+            if defaultArtworkProvider == nil {
+                defaultArtworkProvider = EpisodeArtworkProvider(
+                    service: TMDBService(diagnostics: diagnostics),
+                    apiReadToken: TMDBCredentialStore().effectiveToken()
+                )
+            }
+            provider = defaultArtworkProvider!
+        }
+        let requests = EpisodeArtworkResolver.requests(
+            seriesTMDBId: seriesTMDBId,
+            metadataByFileID: episodeMetadataByFileID
+        )
+        guard !requests.isEmpty else { return }
+        artworkLoadTask = Task {
+            let urls = await provider.stillURLs(seriesID: seriesTMDBId, requests: requests)
+            guard !Task.isCancelled else { return }
+            stillURLByFileID = urls
         }
     }
 
@@ -406,7 +455,8 @@ struct PlayerScreen: View {
                             parsedMetadata: episodeMetadataByFileID[file.fileId],
                             isCurrent: file.fileId == coordinator.currentPlayingFile.fileId,
                             isTargetFocused: focusedTarget == .episode(file.fileId),
-                            backdropURL: backdropURL
+                            // Fallback chain: episode still → series backdrop → placeholder.
+                            artworkURL: stillURLByFileID[file.fileId] ?? backdropURL
                         ) {
                             coordinator.playFile(file)
                             closeDrawer()
@@ -745,7 +795,9 @@ private struct DrawerEpisodeCard: View {
     let parsedMetadata: ParsedMediaName?
     let isCurrent: Bool
     let isTargetFocused: Bool
-    let backdropURL: URL?
+    /// Already-resolved artwork for this card: the episode's TMDB still when
+    /// known, otherwise the series backdrop, otherwise nil for a placeholder.
+    let artworkURL: URL?
     let action: () -> Void
 
     @Environment(\.isFocused) private var isEnvironmentFocused
@@ -852,8 +904,8 @@ private struct DrawerEpisodeCard: View {
     @ViewBuilder
     private var thumbnailBanner: some View {
         ZStack(alignment: .center) {
-            if let backdropURL {
-                AsyncImage(url: backdropURL) { image in
+            if let artworkURL {
+                AsyncImage(url: artworkURL) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     placeholderBackground

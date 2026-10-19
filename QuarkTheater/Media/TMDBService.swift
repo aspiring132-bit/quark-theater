@@ -66,6 +66,33 @@ struct TMDBSearchResult: Decodable, Identifiable, Equatable {
 
 struct TMDBSearchResponse: Decodable { let results: [TMDBSearchResult] }
 
+/// One episode entry from TMDB's TV season-details response. `stillPath` is
+/// optional: TMDB may not have artwork for every episode.
+struct TMDBSeasonEpisode: Decodable, Equatable {
+    let episodeNumber: Int
+    let name: String?
+    let stillPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case episodeNumber = "episode_number"
+        case name
+        case stillPath = "still_path"
+    }
+}
+
+/// https://developer.themoviedb.org/reference/tv-season-details
+struct TMDBSeasonDetails: Decodable, Equatable {
+    let episodes: [TMDBSeasonEpisode]
+
+    /// Episode-number keyed still paths. Episodes without artwork decode to
+    /// a nil value so callers can fall back instead of inventing an image.
+    var stillPathByEpisode: [Int: String?] {
+        var map: [Int: String?] = [:]
+        for episode in episodes { map[episode.episodeNumber] = episode.stillPath }
+        return map
+    }
+}
+
 enum TMDBError: Error, LocalizedError {
     case missingAPIKey, badResponse, rejected(Int)
     var errorDescription: String? {
@@ -195,6 +222,59 @@ struct TMDBService {
         }
     }
 
+    /// Fetch one season's episode metadata. A single response serves every
+    /// episode card for that `(series, season)`; callers must not loop this
+    /// per episode.
+    func seasonDetails(
+        seriesID: Int,
+        seasonNumber: Int,
+        apiReadToken: String?,
+        language: String? = nil
+    ) async throws -> TMDBSeasonDetails {
+        let correlationID = await diagnostics?.makeCorrelationID()
+        let startedAt = Date()
+        let preferredLanguage = language ?? UserDefaults.standard.string(forKey: "scraperLanguage") ?? "zh-CN"
+        let token = (apiReadToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveKey = token.isEmpty ? Self.builtInAPIKey : token
+
+        guard var components = URLComponents(string: "https://api.themoviedb.org/3/tv/\(seriesID)/season/\(seasonNumber)") else {
+            await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, stage: .seasonDetails, reason: .invalidResponse)
+            throw TMDBError.badResponse
+        }
+        var queryItems = [URLQueryItem(name: "language", value: preferredLanguage)]
+        var requestHeaders: [String: String] = ["Accept": "application/json"]
+        if effectiveKey.hasPrefix("eyJ") {
+            requestHeaders["Authorization"] = "Bearer \(effectiveKey)"
+        } else {
+            queryItems.append(URLQueryItem(name: "api_key", value: effectiveKey))
+        }
+        components.queryItems = queryItems
+        guard let url = components.url else { throw TMDBError.badResponse }
+        var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 15)
+        requestHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, stage: .seasonDetails, reason: .invalidResponse)
+                throw TMDBError.badResponse
+            }
+            guard (200...299).contains(http.statusCode) else {
+                await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, stage: .seasonDetails, status: http.statusCode, reason: .unavailable)
+                throw TMDBError.rejected(http.statusCode)
+            }
+            guard let details = try? JSONDecoder().decode(TMDBSeasonDetails.self, from: data) else {
+                await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, stage: .seasonDetails, status: http.statusCode, reason: .invalidResponse)
+                throw TMDBError.badResponse
+            }
+            await recordRequestCompleted(correlationID: correlationID, startedAt: startedAt, stage: .seasonDetails, status: http.statusCode, candidateCount: details.episodes.count)
+            return details
+        } catch {
+            if error is TMDBError { throw error }
+            await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, stage: .seasonDetails, reason: diagnosticReason(for: error))
+            throw error
+        }
+    }
+
     private func performSearch(title: String, type: String, key: String, language: String, correlationID: DiagnosticCorrelationID?) async throws -> [TMDBSearchResult] {
         let startedAt = Date()
         guard var components = URLComponents(string: "https://api.themoviedb.org/3/search/\(type)") else {
@@ -239,16 +319,16 @@ struct TMDBService {
         }
     }
 
-    private func recordRequestCompleted(correlationID: DiagnosticCorrelationID?, startedAt: Date, status: Int, candidateCount: Int) async {
+    private func recordRequestCompleted(correlationID: DiagnosticCorrelationID?, startedAt: Date, stage: DiagnosticStage = .search, status: Int, candidateCount: Int) async {
         await diagnostics?.record(category: .scraping, level: .debug, event: .requestCompleted, correlationID: correlationID, metadata: [
-            .host(.tmdbAPI), .stage(.search), .httpStatus(status), .latencyMilliseconds(elapsedMilliseconds(since: startedAt)),
+            .host(.tmdbAPI), .stage(stage), .httpStatus(status), .latencyMilliseconds(elapsedMilliseconds(since: startedAt)),
             .candidateCount(candidateCount), .outcome(.succeeded), .status(.completed)
         ])
     }
 
-    private func recordRequestFailure(correlationID: DiagnosticCorrelationID?, startedAt: Date, status: Int? = nil, reason: DiagnosticReason) async {
+    private func recordRequestFailure(correlationID: DiagnosticCorrelationID?, startedAt: Date, stage: DiagnosticStage = .search, status: Int? = nil, reason: DiagnosticReason) async {
         var metadata: [DiagnosticMetadata] = [
-            .host(.tmdbAPI), .stage(.search), .latencyMilliseconds(elapsedMilliseconds(since: startedAt)),
+            .host(.tmdbAPI), .stage(stage), .latencyMilliseconds(elapsedMilliseconds(since: startedAt)),
             .outcome(.failed), .reason(reason), .status(.failed)
         ]
         if let status { metadata.append(.httpStatus(status)) }

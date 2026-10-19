@@ -102,6 +102,82 @@ final class TMDBServiceTests: XCTestCase {
         })
     }
 
+    // MARK: - Season details (per-episode artwork)
+
+    func testSeasonDetailsRequestsExpectedPathAndDecodesEpisodes() async throws {
+        var capturedPath: String?
+        let service = service { request in
+            capturedPath = request.url?.path
+            let episodes: [[String: Any]] = [
+                ["episode_number": 1, "name": "pilot", "still_path": "/s1.jpg"],
+                ["episode_number": 2, "name": "second", "still_path": "/s2.jpg"],
+                ["episode_number": 3, "name": "third"] // still_path absent
+            ]
+            return (200, try! JSONSerialization.data(withJSONObject: ["episodes": episodes]))
+        }
+        let details = try await service.seasonDetails(seriesID: 1399, seasonNumber: 4, apiReadToken: "test")
+        XCTAssertEqual(capturedPath, "/3/tv/1399/season/4")
+        XCTAssertEqual(details.episodes.count, 3)
+        XCTAssertEqual(details.episodes[0].episodeNumber, 1)
+        XCTAssertEqual(details.episodes[0].stillPath, "/s1.jpg")
+        XCTAssertEqual(details.episodes[1].stillPath, "/s2.jpg")
+        XCTAssertNil(details.episodes[2].stillPath)
+    }
+
+    func testSeasonDetailsAppliesBearerTokenHeader() async throws {
+        var capturedAuthorization: String?
+        var capturedAPIKeyQuery: String?
+        let service = service { request in
+            capturedAuthorization = request.value(forHTTPHeaderField: "Authorization")
+            let components = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            capturedAPIKeyQuery = components?.queryItems?.first(where: { $0.name == "api_key" })?.value
+            return (200, try! JSONSerialization.data(withJSONObject: ["episodes": []]))
+        }
+        _ = try await service.seasonDetails(seriesID: 1, seasonNumber: 1, apiReadToken: "eyJ-test-token")
+        XCTAssertEqual(capturedAuthorization, "Bearer eyJ-test-token")
+        XCTAssertNil(capturedAPIKeyQuery)
+    }
+
+    func testSeasonDetailsNon2xxThrowsRejected() async {
+        let service = service { _ in (404, Data()) }
+        do {
+            _ = try await service.seasonDetails(seriesID: 1399, seasonNumber: 99, apiReadToken: "test")
+            XCTFail("Expected TMDB error")
+        } catch let error as TMDBError {
+            guard case .rejected(404) = error else { return XCTFail("Unexpected error: \(error)") }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testSeasonDetailsMalformedBodyThrowsBadResponse() async {
+        let service = service { _ in (200, Data("not json".utf8)) }
+        do {
+            _ = try await service.seasonDetails(seriesID: 1399, seasonNumber: 1, apiReadToken: "test")
+            XCTFail("Expected TMDB error")
+        } catch let error as TMDBError {
+            guard case .badResponse = error else { return XCTFail("Unexpected error: \(error)") }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    @MainActor
+    func testSeasonDetailsDiagnosticsNeverContainTokenOrFullURL() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("tmdb-season-diagnostics-\(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: directory))
+        StubTMDBURLProtocol.handler = { _ in
+            (200, try! JSONSerialization.data(withJSONObject: ["episodes": [["episode_number": 1, "still_path": "/secret-still.jpg"]]]))
+        }
+        let instrumented = TMDBService(session: stubSession(), diagnostics: diagnostics)
+        _ = try await instrumented.seasonDetails(seriesID: 42, seasonNumber: 2, apiReadToken: "secret-season-token")
+        await diagnostics.waitForPendingOperations()
+        let text = String(decoding: try JSONEncoder().encode(diagnostics.records), as: UTF8.self)
+        XCTAssertFalse(text.contains("secret-season-token"))
+        XCTAssertFalse(text.contains("season/2"))
+        XCTAssertTrue(diagnostics.records.contains { $0.category == .scraping && $0.event == .requestCompleted })
+    }
+
     @MainActor
     func testDiagnosticsReportSafeFailureWithStatusAndReason() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("tmdb-diagnostics-failure-\(UUID().uuidString)", isDirectory: true)

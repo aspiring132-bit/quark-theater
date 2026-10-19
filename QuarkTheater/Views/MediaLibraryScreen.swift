@@ -51,6 +51,7 @@ struct MediaLibraryScreen: View {
     @State private var playlistQueue: [CloudFile] = []
     @State private var playlistMetadata: [String: ParsedMediaName] = [:]
     @State private var playingBackdropURL: URL?
+    @State private var playingSeriesTMDBId: Int?
 
     // Modals & sheets
     @State private var rematchTarget: RematchSheetTarget?
@@ -420,7 +421,8 @@ struct MediaLibraryScreen: View {
                 history: history,
                 diagnostics: diagnostics,
                 backdropURL: playingBackdropURL,
-                episodeMetadataByFileID: playlistMetadata
+                episodeMetadataByFileID: playlistMetadata,
+                seriesTMDBId: playingSeriesTMDBId
             )
         }
         .sheet(item: $matchCandidate) { candidate in
@@ -591,6 +593,7 @@ struct MediaLibraryScreen: View {
                                 playlistQueue = projection.queue
                                 playlistMetadata = Dictionary(uniqueKeysWithValues: selectedEpisodes.map { ($0.file.fileId, $0.parsed) })
                                 playingBackdropURL = item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
+                                playingSeriesTMDBId = item.mediaType == .series ? item.tmdbId : nil
                                 playingFile = projection.selected
                             }
                         } label: {
@@ -645,6 +648,7 @@ struct MediaLibraryScreen: View {
                                                 : episodes.filter { $0.2.episodeNumber != nil }.map(\.1)
                                             playlistMetadata = Dictionary(uniqueKeysWithValues: (ep.2.episodeNumber == nil ? [ep] : episodes.filter { $0.2.episodeNumber != nil }).map { ($0.1.fileId, $0.2) })
                                             playingBackdropURL = item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
+                                            playingSeriesTMDBId = item.mediaType == .series ? item.tmdbId : nil
                                             playingFile = ep.1
                                         } label: {
                                             VStack(alignment: .leading, spacing: 4) {

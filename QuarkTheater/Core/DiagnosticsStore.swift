@@ -216,6 +216,7 @@ enum DiagnosticStage: String, CaseIterable, Sendable {
     case ranking
     case disposition
     case persistence
+    case seasonDetails = "season_details"
 }
 
 enum DiagnosticConfidenceBucket: String, CaseIterable, Sendable {

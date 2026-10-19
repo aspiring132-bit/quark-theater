@@ -356,7 +356,8 @@ struct MediaItemDetailScreen: View {
                 history: history,
                 diagnostics: diagnostics,
                 backdropURL: item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") },
-                episodeMetadataByFileID: Dictionary(uniqueKeysWithValues: currentSeasonEpisodes.map { ($0.1.fileId, $0.2) })
+                episodeMetadataByFileID: Dictionary(uniqueKeysWithValues: currentSeasonEpisodes.map { ($0.1.fileId, $0.2) }),
+                seriesTMDBId: item.mediaType == .series ? item.tmdbId : nil
             )
         }
         .sheet(isPresented: $showRematchSheet) {
