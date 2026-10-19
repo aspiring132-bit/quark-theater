@@ -37,13 +37,16 @@ struct PlayerScreen: View {
          backdropURL: URL? = nil,
          episodeMetadataByFileID: [String: ParsedMediaName] = [:],
          seriesTMDBId: Int? = nil,
-         artworkProvider: EpisodeArtworkProvider? = nil) {
+         artworkProvider: EpisodeArtworkProvider? = nil,
+         // Narrow UI-test seam: lets a harness observe the real coordinator's
+         // state. Never set in production call sites.
+         coordinatorObserver: ((PlaybackCoordinator) -> Void)? = nil) {
         self.diagnostics = diagnostics
         self.backdropURL = backdropURL
         self.episodeMetadataByFileID = episodeMetadataByFileID
         self.seriesTMDBId = seriesTMDBId
         self.artworkProvider = artworkProvider
-        _coordinator = StateObject(wrappedValue: PlaybackCoordinator(
+        let playbackCoordinator = PlaybackCoordinator(
             client: client,
             accountID: accountID,
             file: file,
@@ -51,7 +54,9 @@ struct PlayerScreen: View {
             automaticallyPlayNext: automaticallyPlayNext,
             history: history,
             diagnostics: diagnostics
-        ))
+        )
+        _coordinator = StateObject(wrappedValue: playbackCoordinator)
+        coordinatorObserver?(playbackCoordinator)
     }
 
     var body: some View {
@@ -137,6 +142,7 @@ struct PlayerScreen: View {
                 }
                 .buttonStyle(.borderless)
                 .focused($focusedTarget, equals: .drawerTrigger)
+                .accessibilityIdentifier("player.drawerTrigger")
                 // Keep the trigger in the focus tree after the hint fades so
                 // the next ▼ command still has a stable focus target.
                 .opacity(showHintPill ? 1 : 0)
@@ -429,6 +435,7 @@ struct PlayerScreen: View {
         }
         .buttonStyle(.borderless)
         .focused($focusedTarget, equals: .drawerTab(tab.rawValue))
+        .accessibilityIdentifier("player.tab.\(tab.rawValue)")
     }
 
     private func tabIcon(for tab: DrawerTab) -> String {
@@ -449,7 +456,7 @@ struct PlayerScreen: View {
                         nextEpisodeButton
                     }
 
-                    ForEach(coordinator.playlistQueue) { file in
+                    ForEach(Array(coordinator.playlistQueue.enumerated()), id: \.element.fileId) { index, file in
                         DrawerEpisodeCard(
                             file: file,
                             parsedMetadata: episodeMetadataByFileID[file.fileId],
@@ -463,6 +470,8 @@ struct PlayerScreen: View {
                         }
                         .id(PlayerFocusTarget.episode(file.fileId))
                         .focused($focusedTarget, equals: .episode(file.fileId))
+                        // Index-based identifier: never exposes real cloud file IDs.
+                        .accessibilityIdentifier("player.episodeCard.\(index)")
                     }
                 }
                 .padding(.horizontal, 32)
@@ -522,6 +531,7 @@ struct PlayerScreen: View {
         .buttonStyle(.borderless)
         .id(PlayerFocusTarget.nextEpisode)
         .focused($focusedTarget, equals: .nextEpisode)
+        .accessibilityIdentifier("player.nextEpisode")
     }
 
     // MARK: - Subtitles Content Row

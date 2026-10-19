@@ -43,24 +43,32 @@ struct QuarkTheaterApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(
-                model: model,
-                history: history,
-                mediaCatalog: mediaCatalog,
-                storageBoot: storageBoot,
-                onRetryStorage: reloadRepositories,
-                onResetStorage: resetStorageAndReload
-            )
-                .preferredColorScheme(.dark)
-                .task {
-                    guard !ProcessInfo.processInfo.arguments.contains("--testing") else { return }
-                    await model.restore()
-                }
-                .onChange(of: scenePhase) { phase in
-                    if phase == .background, model.isLoggingIn {
-                        model.cancelLogin()
+            // UI-test-only seam: `--uitest-player` presents the real player
+            // screen with a fully offline deterministic session. The normal
+            // production launch path below is unchanged.
+            if ProcessInfo.processInfo.arguments.contains("--uitest-player") {
+                PlayerUITestHarness()
+                    .preferredColorScheme(.dark)
+            } else {
+                RootView(
+                    model: model,
+                    history: history,
+                    mediaCatalog: mediaCatalog,
+                    storageBoot: storageBoot,
+                    onRetryStorage: reloadRepositories,
+                    onResetStorage: resetStorageAndReload
+                )
+                    .preferredColorScheme(.dark)
+                    .task {
+                        guard !ProcessInfo.processInfo.arguments.contains("--testing") else { return }
+                        await model.restore()
                     }
-                }
+                    .onChange(of: scenePhase) { phase in
+                        if phase == .background, model.isLoggingIn {
+                            model.cancelLogin()
+                        }
+                    }
+            }
         }
     }
 

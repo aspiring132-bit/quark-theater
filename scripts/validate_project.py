@@ -19,11 +19,12 @@ assert all(a.get("isEnabled") == "NO" for a in args if a.get("argument") == "--m
 test_args = scheme.findall(".//TestAction/CommandLineArguments/CommandLineArgument")
 assert any(a.get("argument") == "--testing" and a.get("isEnabled") == "YES" for a in test_args), "Hosted tests must opt out of session restoration"
 tests = scheme.findall(".//TestableReference")
-assert len(tests) == 1 and tests[0].get("skipped") == "NO", "Tests must be included"
+assert len(tests) == 2 and all(t.get("skipped") == "NO" for t in tests), "Unit and UI tests must be included"
 ET.parse(root / "QuarkTheater.xcodeproj/project.xcworkspace/contents.xcworkspacedata")
 config = (root / "Config/Shared.xcconfig").read_text(encoding="utf-8")
 for setting in ["TARGETED_DEVICE_FAMILY = 3", "TVOS_DEPLOYMENT_TARGET = 26.0", "SWIFT_VERSION = 6.0"]:
     assert setting in config, "Missing build setting: " + setting
 test_count = sum(len(re.findall(r"\bfunc test\w+\s*\(", p.read_text(encoding="utf-8"))) for p in (root / "QuarkTheaterTests").rglob("*.swift"))
+uitest_count = sum(len(re.findall(r"\bfunc test\w+\s*\(", p.read_text(encoding="utf-8"))) for p in (root / "QuarkTheaterUITests").rglob("*.swift"))
 print(f"PASS: {len(definitions)} PBX objects; references, shared scheme, target settings and generation verified.")
-print(f"Located {test_count} XCTest methods. Tests NOT executed. Swift/Apple SDK compilation NOT checked.")
+print(f"Located {test_count} XCTest and {uitest_count} XCUITest methods. Tests NOT executed. Swift/Apple SDK compilation NOT checked.")

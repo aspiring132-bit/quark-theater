@@ -35,12 +35,13 @@ def generate() -> dict[Path, str]:
 
     app_sources = sorted((ROOT / "QuarkTheater").rglob("*.swift"))
     test_sources = sorted((ROOT / "QuarkTheaterTests").rglob("*.swift"))
-    if not app_sources or not test_sources:
-        raise ValueError("Both application and test Swift sources are required.")
+    uitest_sources = sorted((ROOT / "QuarkTheaterUITests").rglob("*.swift"))
+    if not app_sources or not test_sources or not uitest_sources:
+        raise ValueError("Application, unit-test and UI-test Swift sources are required.")
     config_ref = add("config:Shared", 'isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>";')
     config_group = add("group:Config", "isa = PBXGroup; children = " + array([config_ref]) + '; path = Config; sourceTree = "<group>";')
     source_refs: dict[str, str] = {}
-    for path in app_sources + test_sources:
+    for path in app_sources + test_sources + uitest_sources:
         relative = path.relative_to(ROOT).as_posix()
         source_refs[relative] = add("file:" + relative, "isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = " + quote(path.name) + '; sourceTree = "<group>";')
 
@@ -60,12 +61,14 @@ def generate() -> dict[Path, str]:
                    "isa = PBXGroup; children = " + array(children) + "; path = " + quote(directory.name) + '; sourceTree = "<group>";')
     app_group = source_group(ROOT / "QuarkTheater")
     test_group = source_group(ROOT / "QuarkTheaterTests")
+    uitest_group = source_group(ROOT / "QuarkTheaterUITests")
     app_product = add("product:app", 'isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuarkTheater.app; sourceTree = BUILT_PRODUCTS_DIR;')
     test_product = add("product:test", 'isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuarkTheaterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR;')
-    products = add("group:Products", "isa = PBXGroup; children = " + array([app_product, test_product]) + '; name = Products; sourceTree = "<group>";')
+    uitest_product = add("product:uitest", 'isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuarkTheaterUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR;')
+    products = add("group:Products", "isa = PBXGroup; children = " + array([app_product, test_product, uitest_product]) + '; name = Products; sourceTree = "<group>";')
     sqlite_ref = add("framework:sqlite3", 'isa = PBXFileReference; lastKnownFileType = sourcecode.text-based-dylib-definition; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT;')
     frameworks = add("group:Frameworks", "isa = PBXGroup; children = " + array([sqlite_ref]) + '; name = Frameworks; sourceTree = "<group>";')
-    root_group = add("group:Root", "isa = PBXGroup; children = " + array([app_group, test_group, config_group, frameworks, products]) + '; sourceTree = "<group>";')
+    root_group = add("group:Root", "isa = PBXGroup; children = " + array([app_group, test_group, uitest_group, config_group, frameworks, products]) + '; sourceTree = "<group>";')
 
     ksplayer_package = add("package:KSPlayer", 'isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/kingslay/KSPlayer.git"; requirement = { kind = upToNextMajorVersion; minimumVersion = "2.3.0"; };')
     ksplayer_product = add("productDep:KSPlayer", "isa = XCSwiftPackageProductDependency; package = " + ksplayer_package + '; productName = KSPlayer;')
@@ -83,6 +86,11 @@ def generate() -> dict[Path, str]:
         phase("test:sources", "PBXSourcesBuildPhase", [source_refs[p.relative_to(ROOT).as_posix()] for p in test_sources]),
         phase("test:frameworks", "PBXFrameworksBuildPhase", []),
         phase("test:resources", "PBXResourcesBuildPhase", []),
+    ]
+    uitest_phases = [
+        phase("uitest:sources", "PBXSourcesBuildPhase", [source_refs[p.relative_to(ROOT).as_posix()] for p in uitest_sources]),
+        phase("uitest:frameworks", "PBXFrameworksBuildPhase", []),
+        phase("uitest:resources", "PBXResourcesBuildPhase", []),
     ]
 
     def configurations(scope: str, base: dict[str, str], shared: bool = False) -> str:
@@ -122,14 +130,22 @@ def generate() -> dict[Path, str]:
         "GENERATE_INFOPLIST_FILE": "YES", "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/QuarkTheater.app/QuarkTheater",
         "BUNDLE_LOADER": "$(TEST_HOST)", "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks @loader_path/Frameworks",
     })
+    uitest_config = configurations("uitest", {
+        "PRODUCT_NAME": "$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER": "org.quarktheater.app.uitests",
+        "GENERATE_INFOPLIST_FILE": "YES", "TEST_TARGET_NAME": "QuarkTheater",
+        "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks @loader_path/Frameworks",
+    })
     project_id = identifier("project")
     app_id = identifier("target:app")
     test_id = identifier("target:test")
+    uitest_id = identifier("target:uitest")
     proxy = add("proxy:app", "isa = PBXContainerItemProxy; containerPortal = " + project_id + "; proxyType = 1; remoteGlobalIDString = " + app_id + "; remoteInfo = QuarkTheater;")
     dependency = add("dependency:test:app", "isa = PBXTargetDependency; target = " + app_id + "; targetProxy = " + proxy + ";")
+    uitest_dependency = add("dependency:uitest:app", "isa = PBXTargetDependency; target = " + app_id + "; targetProxy = " + proxy + ";")
     add("target:app", "isa = PBXNativeTarget; buildConfigurationList = " + app_config + "; buildPhases = " + array(app_phases) + "; buildRules = (); dependencies = (); name = QuarkTheater; packageProductDependencies = " + array([ksplayer_product]) + "; productName = QuarkTheater; productReference = " + app_product + '; productType = "com.apple.product-type.application";')
     add("target:test", "isa = PBXNativeTarget; buildConfigurationList = " + test_config + "; buildPhases = " + array(test_phases) + "; buildRules = (); dependencies = " + array([dependency]) + "; name = QuarkTheaterTests; productName = QuarkTheaterTests; productReference = " + test_product + '; productType = "com.apple.product-type.bundle.unit-test";')
-    add("project", 'isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = { ' + app_id + ' = { CreatedOnToolsVersion = 16.0; DevelopmentTeam = LY2UZ2U7D2; ProvisioningStyle = Automatic; }; ' + test_id + ' = { CreatedOnToolsVersion = 16.0; TestTargetID = ' + app_id + '; }; }; }; buildConfigurationList = ' + project_config + '; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh-Hans; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base); mainGroup = ' + root_group + '; packageReferences = ' + array([ksplayer_package]) + '; productRefGroup = ' + products + '; projectDirPath = ""; projectRoot = ""; targets = ' + array([app_id, test_id]) + ";")
+    add("target:uitest", "isa = PBXNativeTarget; buildConfigurationList = " + uitest_config + "; buildPhases = " + array(uitest_phases) + "; buildRules = (); dependencies = " + array([uitest_dependency]) + "; name = QuarkTheaterUITests; productName = QuarkTheaterUITests; productReference = " + uitest_product + '; productType = "com.apple.product-type.bundle.ui-testing";')
+    add("project", 'isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = { ' + app_id + ' = { CreatedOnToolsVersion = 16.0; DevelopmentTeam = LY2UZ2U7D2; ProvisioningStyle = Automatic; }; ' + test_id + ' = { CreatedOnToolsVersion = 16.0; TestTargetID = ' + app_id + '; }; ' + uitest_id + ' = { CreatedOnToolsVersion = 16.0; TestTargetID = ' + app_id + '; }; }; }; buildConfigurationList = ' + project_config + '; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh-Hans; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base); mainGroup = ' + root_group + '; packageReferences = ' + array([ksplayer_package]) + '; productRefGroup = ' + products + '; projectDirPath = ""; projectRoot = ""; targets = ' + array([app_id, test_id, uitest_id]) + ";")
     pbx = "// !$*UTF8*$!\n{\n\tarchiveVersion = 1;\n\tclasses = {};\n\tobjectVersion = 56;\n\tobjects = {\n"
     pbx += "".join("\t\t" + key + " = { " + value + " };\n" for key, value in sorted(objects.items()))
     pbx += "\t};\n\trootObject = " + project_id + ";\n}\n"
@@ -137,16 +153,18 @@ def generate() -> dict[Path, str]:
         return f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{object_id}" BuildableName="{name}" BlueprintName="{target}" ReferencedContainer="container:QuarkTheater.xcodeproj"/>'
     app_buildable = buildable(app_id, "QuarkTheater.app", "QuarkTheater")
     test_buildable = buildable(test_id, "QuarkTheaterTests.xctest", "QuarkTheaterTests")
+    uitest_buildable = buildable(uitest_id, "QuarkTheaterUITests.xctest", "QuarkTheaterUITests")
     scheme = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="1600" version="1.3">
   <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES">
     <BuildActionEntries>
       <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">{app_buildable}</BuildActionEntry>
       <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="NO">{test_buildable}</BuildActionEntry>
+      <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="NO">{uitest_buildable}</BuildActionEntry>
     </BuildActionEntries>
   </BuildAction>
   <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES">
-    <Testables><TestableReference skipped="NO">{test_buildable}</TestableReference></Testables>
+    <Testables><TestableReference skipped="NO">{test_buildable}</TestableReference><TestableReference skipped="NO">{uitest_buildable}</TestableReference></Testables>
     <CommandLineArguments><CommandLineArgument argument="--testing" isEnabled="YES"/></CommandLineArguments>
     <MacroExpansion>{app_buildable}</MacroExpansion>
   </TestAction>
@@ -186,7 +204,8 @@ def main() -> int:
         return 1
     count = len(list((ROOT / "QuarkTheater").rglob("*.swift")))
     tests = len(list((ROOT / "QuarkTheaterTests").rglob("*.swift")))
-    print(f"{'Checked' if args.check else 'Generated'} Xcode project: {count} app and {tests} test Swift files.")
+    uitests = len(list((ROOT / "QuarkTheaterUITests").rglob("*.swift")))
+    print(f"{'Checked' if args.check else 'Generated'} Xcode project: {count} app, {tests} test and {uitests} UI-test Swift files.")
     return 0
 
 if __name__ == "__main__":
