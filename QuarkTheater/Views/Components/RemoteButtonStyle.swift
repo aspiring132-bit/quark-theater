@@ -1,5 +1,15 @@
 import SwiftUI
 
+enum BrandPalette {
+    static let deepCharcoal = Color(red: 0x12 / 255.0, green: 0x14 / 255.0, blue: 0x17 / 255.0)
+    static let secondary = Color(red: 0x20 / 255.0, green: 0x24 / 255.0, blue: 0x2A / 255.0)
+    static let glassWhite = Color(red: 0xF3 / 255.0, green: 0xF6 / 255.0, blue: 0xF8 / 255.0)
+    static let iceBlue = Color(red: 0xA9 / 255.0, green: 0xD7 / 255.0, blue: 0xF4 / 255.0)
+    static let warmPeach = Color(red: 0xF3 / 255.0, green: 0xB6 / 255.0, blue: 0xA1 / 255.0)
+    static let secondaryText = Color(red: 0x9D / 255.0, green: 0xA5 / 255.0, blue: 0xAC / 255.0)
+    static let iceGlow = iceBlue.opacity(0.55)
+}
+
 /// Unified button style for tvOS remote navigation with clear, consistent
 /// visual differentiation across normal, selected, and focused states.
 struct RemoteButtonStyle: ButtonStyle {
@@ -50,29 +60,29 @@ struct RemoteButtonStyle: ButtonStyle {
             if isFocused {
                 return .black
             } else if isSelected {
-                return .white
+                return BrandPalette.glassWhite
             } else {
-                return .white.opacity(0.8)
+                return BrandPalette.glassWhite.opacity(0.8)
             }
         }
 
         private var backgroundColor: Color {
             if isFocused {
-                return .white
+                return BrandPalette.glassWhite
             } else if isSelected {
-                return Color.cyan.opacity(0.35)
+                return BrandPalette.glassWhite.opacity(0.12)
             } else {
-                return Color.white.opacity(0.08)
+                return BrandPalette.glassWhite.opacity(0.08)
             }
         }
 
         private var borderColor: Color {
             if isFocused {
-                return .white
+                return BrandPalette.glassWhite
             } else if isSelected {
-                return Color.cyan.opacity(0.6)
+                return BrandPalette.iceBlue.opacity(0.22)
             } else {
-                return Color.white.opacity(0.15)
+                return BrandPalette.glassWhite.opacity(0.15)
             }
         }
     }

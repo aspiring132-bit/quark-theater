@@ -175,7 +175,7 @@ struct MediaItemDetailScreen: View {
 
     var body: some View {
         ZStack {
-            Color(red: 0.05, green: 0.07, blue: 0.10)
+            BrandPalette.deepCharcoal
                 .ignoresSafeArea()
 
             ScrollView {
@@ -235,7 +235,7 @@ struct MediaItemDetailScreen: View {
                                             .font(.headline.bold())
                                     }
                                     .buttonStyle(.borderedProminent)
-                                    .tint(.cyan)
+                                    .tint(BrandPalette.glassWhite)
                                 }
 
                                 Button {
@@ -398,7 +398,7 @@ struct MediaItemDetailScreen: View {
                 HStack {
                     Text(cardTitle)
                         .font(.headline.bold())
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(BrandPalette.glassWhite)
 
                     Spacer()
 
@@ -436,7 +436,7 @@ struct MediaItemDetailScreen: View {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Capsule().fill(Color.white.opacity(0.15))
-                            Capsule().fill(Color.cyan)
+                            Capsule().fill(BrandPalette.glassWhite)
                                 .frame(width: geo.size.width * CGFloat(min(1.0, progress)))
                         }
                     }
@@ -520,7 +520,7 @@ struct MediaItemDetailScreen: View {
 
             // Cinematic fade gradients to solid base color
             LinearGradient(
-                colors: [.clear, Color(red: 0.05, green: 0.07, blue: 0.10).opacity(0.8), Color(red: 0.05, green: 0.07, blue: 0.10)],
+                colors: [.clear, BrandPalette.deepCharcoal.opacity(0.8), BrandPalette.deepCharcoal],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -545,7 +545,7 @@ private struct SeasonTabButton: View {
                     .font(.headline.weight(isFocused || isSelected ? .bold : .medium))
                 Text("(\(count)集)")
                     .font(.subheadline)
-                    .foregroundStyle(isFocused ? Color.black.opacity(0.7) : (isSelected ? Color.cyan.opacity(0.8) : Color.secondary))
+                    .foregroundStyle(isFocused ? Color.black.opacity(0.7) : (isSelected ? BrandPalette.glassWhite : BrandPalette.secondaryText))
             }
             .padding(.horizontal, 28)
             .padding(.vertical, 14)
@@ -554,18 +554,18 @@ private struct SeasonTabButton: View {
                     if isFocused {
                         Color.white
                     } else if isSelected {
-                        Color.cyan.opacity(0.25)
+                        BrandPalette.glassWhite.opacity(0.1)
                     } else {
                         Color.white.opacity(0.08)
                     }
                 }
             )
-            .foregroundStyle(isFocused ? Color.black : (isSelected ? Color.cyan : Color.white))
+            .foregroundStyle(isFocused ? Color.black : BrandPalette.glassWhite)
             .clipShape(Capsule())
             .overlay(
                 Capsule()
                     .stroke(
-                        isFocused ? Color.white : (isSelected ? Color.cyan : Color.white.opacity(0.15)),
+                        isFocused ? BrandPalette.glassWhite : (isSelected ? BrandPalette.iceBlue.opacity(0.25) : BrandPalette.glassWhite.opacity(0.15)),
                         lineWidth: isFocused ? 3 : (isSelected ? 2 : 1)
                     )
             )

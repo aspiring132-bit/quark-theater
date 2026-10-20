@@ -16,7 +16,7 @@ struct RootView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(red: 0.04, green: 0.06, blue: 0.09)
+            BrandPalette.deepCharcoal
                 .ignoresSafeArea()
 
             // If not logged in, ALWAYS show cinemaTab (which renders LoginScreen)
@@ -148,7 +148,7 @@ struct RootView: View {
 
     private func dockBackground(isFocused: Bool, isSelected: Bool) -> Color {
         if isFocused { return .white }
-        if isSelected { return Color.cyan.opacity(0.35) }
+        if isSelected { return BrandPalette.glassWhite.opacity(0.12) }
         return .clear
     }
 
@@ -160,7 +160,7 @@ struct RootView: View {
 
     private func dockStroke(isFocused: Bool, isSelected: Bool) -> Color {
         if isFocused { return .white }
-        if isSelected { return Color.cyan.opacity(0.6) }
+        if isSelected { return BrandPalette.iceBlue.opacity(0.22) }
         return .clear
     }
 
@@ -239,7 +239,7 @@ struct RootView: View {
             HStack(spacing: 20) {
                 Button("重试初始化", action: onRetryStorage)
                     .buttonStyle(.borderedProminent)
-                    .tint(.cyan)
+                    .tint(BrandPalette.glassWhite)
                 Button("清除本地缓存并重建", role: .destructive, action: onResetStorage)
                     .buttonStyle(.bordered)
             }
@@ -377,7 +377,7 @@ private struct SourcesManagementScreen: View {
                         HStack {
                             Image(systemName: "cloud.fill")
                                 .font(.title)
-                                .foregroundStyle(.cyan)
+                                .foregroundStyle(BrandPalette.glassWhite)
                             Text("夸克网盘")
                                 .font(.title3.bold())
                             Spacer()
@@ -401,7 +401,7 @@ private struct SourcesManagementScreen: View {
                                 Label(count > 0 ? "管理绑定文件夹 (\(count))" : "选择绑定文件夹", systemImage: "folder.badge.gearshape")
                             }
                             .buttonStyle(.borderedProminent)
-                            .tint(.cyan)
+                            .tint(BrandPalette.glassWhite)
                         }
                     }
                     .padding(24)
@@ -548,7 +548,7 @@ private struct SettingsScreen: View {
                             .font(.headline.bold())
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.cyan)
+                    .tint(BrandPalette.glassWhite)
 
                     Spacer()
                 }
@@ -558,11 +558,12 @@ private struct SettingsScreen: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: 72, height: 72)
-                        .shadow(color: Color(red: 0, green: 0.85, blue: 1.0).opacity(0.3), radius: 12, x: 0, y: 4)
+                        .shadow(color: BrandPalette.iceGlow.opacity(0.55), radius: 12, x: 0, y: 4)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("THEATER · 设置").font(.largeTitle.bold())
-                        Text("版本：\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0") · tvOS 原生私人影院")
+                        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.2"
+                        Text("版本：V\(appVersion.replacingOccurrences(of: ".", with: "-")) · tvOS 原生私人影院")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
@@ -683,7 +684,7 @@ private struct SettingsScreen: View {
                 .focusSection()
 
                 if let settingsMessage {
-                    Text(settingsMessage).foregroundStyle(.cyan).font(.callout)
+                    Text(settingsMessage).foregroundStyle(BrandPalette.glassWhite).font(.callout)
                 }
 
                 // Integrated Diagnostics Section (Focus Section)
@@ -704,7 +705,7 @@ private struct SettingsScreen: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(.cyan)
+                        .tint(BrandPalette.glassWhite)
                         .disabled(isExportingLogs)
 
                         Button("清空运行日志") {
@@ -756,7 +757,7 @@ private struct SettingsScreen: View {
                         Text("日志存储失败（\(failure.operation.rawValue)，错误码 \(failure.code)）")
                             .foregroundStyle(.orange)
                     }
-                    if let diagnosticsMessage { Text(diagnosticsMessage).foregroundStyle(.cyan) }
+                    if let diagnosticsMessage { Text(diagnosticsMessage).foregroundStyle(BrandPalette.glassWhite) }
                 }
                 .focusSection()
             }

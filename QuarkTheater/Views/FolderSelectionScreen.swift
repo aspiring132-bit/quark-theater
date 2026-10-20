@@ -61,7 +61,7 @@ struct FolderSelectionScreen: View {
                         .font(.headline.bold())
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.cyan)
+                    .tint(BrandPalette.glassWhite)
                     .disabled(isLoading)
 
                     if pathStack.count > 1 {
@@ -120,7 +120,7 @@ struct FolderSelectionScreen: View {
                 // MARK: - Breadcrumb Navigation Bar
                 HStack(spacing: 8) {
                     Image(systemName: "folder.fill")
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(BrandPalette.glassWhite)
                     Text("当前路径：")
                         .font(.headline)
                         .foregroundStyle(.secondary)
@@ -141,7 +141,7 @@ struct FolderSelectionScreen: View {
                         } label: {
                             Text(item.name)
                                 .font(index == pathStack.count - 1 ? .headline.bold() : .headline)
-                                .foregroundStyle(index == pathStack.count - 1 ? Color.cyan : Color.white)
+                                .foregroundStyle(index == pathStack.count - 1 ? BrandPalette.glassWhite : BrandPalette.secondaryText)
                         }
                         .buttonStyle(.borderless)
                         .focused($focusedTarget, equals: .breadcrumb(index))
@@ -153,7 +153,7 @@ struct FolderSelectionScreen: View {
                     if !boundFoldersMap.isEmpty {
                         Text("已选定 \(boundFoldersMap.count) 个文件夹")
                             .font(.callout.bold())
-                            .foregroundStyle(.cyan)
+                            .foregroundStyle(BrandPalette.glassWhite)
                     }
                 }
                 .padding(.horizontal, 20)
@@ -329,11 +329,11 @@ private struct FolderItemRow: View {
                 HStack(spacing: 16) {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 28))
-                        .foregroundStyle(isSelected ? Color.cyan : Color.secondary)
+                        .foregroundStyle(isSelected ? BrandPalette.glassWhite : BrandPalette.secondaryText)
 
                     Image(systemName: "folder.fill")
                         .font(.system(size: 32))
-                        .foregroundStyle(Color.cyan)
+                        .foregroundStyle(BrandPalette.glassWhite)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(folder.name)
@@ -346,11 +346,11 @@ private struct FolderItemRow: View {
                     Spacer()
                 }
                 .padding(16)
-                .background(isSelected ? Color.cyan.opacity(0.12) : Color.white.opacity(0.04))
+                .background(isSelected ? BrandPalette.glassWhite.opacity(0.08) : BrandPalette.glassWhite.opacity(0.04))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
-                        .stroke(isSelected ? Color.cyan : Color.white.opacity(0.08), lineWidth: isSelected ? 2 : 1)
+                        .stroke(isSelected ? BrandPalette.iceBlue.opacity(0.28) : BrandPalette.glassWhite.opacity(0.08), lineWidth: isSelected ? 2 : 1)
                 )
             }
             .buttonStyle(.card)

@@ -223,7 +223,7 @@ struct MediaLibraryScreen: View {
                         ProgressView().progressViewStyle(.circular)
                         Text(statusProgress.isEmpty ? "正在扫描网盘文件…" : statusProgress)
                             .font(.callout)
-                            .foregroundStyle(.cyan)
+                            .foregroundStyle(BrandPalette.glassWhite)
                     }
                     .padding(.horizontal, 60)
                 }
@@ -310,7 +310,7 @@ struct MediaLibraryScreen: View {
                             scanTask = Task { await scan() }
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(.cyan)
+                        .tint(BrandPalette.glassWhite)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(80)
@@ -345,7 +345,7 @@ struct MediaLibraryScreen: View {
                                         Text("\(epInfo) · \(candidate.file.name)").font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer()
-                                    Text("手动匹配 TMDB").font(.subheadline.bold()).foregroundStyle(.cyan)
+                                    Text("手动匹配 TMDB").font(.subheadline.bold()).foregroundStyle(BrandPalette.glassWhite)
                                 }
                                 .padding(16)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -478,8 +478,8 @@ struct MediaLibraryScreen: View {
                         stops: [
                             .init(color: .black.opacity(0.25), location: 0),
                             .init(color: .clear, location: 0.28),
-                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.7), location: 0.75),
-                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09), location: 1.0)
+                            .init(color: BrandPalette.deepCharcoal.opacity(0.7), location: 0.75),
+                            .init(color: BrandPalette.deepCharcoal, location: 1.0)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -488,8 +488,8 @@ struct MediaLibraryScreen: View {
                 .overlay(
                     LinearGradient(
                         stops: [
-                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.92), location: 0),
-                            .init(color: Color(red: 0.04, green: 0.06, blue: 0.09).opacity(0.55), location: 0.55),
+                            .init(color: BrandPalette.deepCharcoal.opacity(0.92), location: 0),
+                            .init(color: BrandPalette.deepCharcoal.opacity(0.55), location: 0.55),
                             .init(color: .clear, location: 1.0)
                         ],
                         startPoint: .leading,
@@ -507,8 +507,8 @@ struct MediaLibraryScreen: View {
                             .font(.caption.bold())
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
-                            .background(Color.cyan.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
-                            .foregroundStyle(.cyan)
+                            .background(BrandPalette.glassWhite.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                            .foregroundStyle(BrandPalette.glassWhite)
 
                         if let year = item.year {
                             Text(String(year))
@@ -579,7 +579,7 @@ struct MediaLibraryScreen: View {
                             .padding(.vertical, 12)
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(.cyan)
+                        .tint(BrandPalette.glassWhite)
                         .focused($focusedHeroAction, equals: .heroDetails)
 
                         // 1-Click Quick Play
@@ -703,12 +703,12 @@ struct MediaLibraryScreen: View {
                 case .success(let image):
                     image.resizable().scaledToFill()
                 default:
-                    Color(red: 0.08, green: 0.1, blue: 0.14)
+                    BrandPalette.secondary
                 }
             }
         } else {
             LinearGradient(
-                colors: [Color(red: 0.12, green: 0.08, blue: 0.1), Color(red: 0.04, green: 0.06, blue: 0.09)],
+                colors: [BrandPalette.secondary, BrandPalette.deepCharcoal],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -979,19 +979,19 @@ private struct FilterPillButton: View {
                         if isFocused {
                             Color.white
                         } else if isSelected {
-                            Color.cyan.opacity(0.3)
+                            BrandPalette.glassWhite.opacity(0.1)
                         } else {
                             Color.white.opacity(0.08)
                         }
                     }
                 )
                 .foregroundStyle(
-                    isFocused ? Color.black : (isSelected ? Color.cyan : Color.white.opacity(0.85))
+                    isFocused ? Color.black : BrandPalette.glassWhite.opacity(0.85)
                 )
                 .clipShape(Capsule())
                 .overlay(
                     Capsule().stroke(
-                        isFocused ? Color.white : (isSelected ? Color.cyan : Color.white.opacity(0.12)),
+                        isFocused ? BrandPalette.glassWhite : (isSelected ? BrandPalette.iceBlue.opacity(0.25) : BrandPalette.glassWhite.opacity(0.12)),
                         lineWidth: isFocused ? 2.5 : (isSelected ? 2 : 1)
                     )
                 )

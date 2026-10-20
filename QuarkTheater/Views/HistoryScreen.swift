@@ -48,7 +48,7 @@ struct HomeContinueWatchingView: View {
                                     HStack {
                                         Image(systemName: "play.circle.fill")
                                             .font(.title3)
-                                            .foregroundStyle(.cyan)
+                                            .foregroundStyle(BrandPalette.glassWhite)
                                         Spacer()
                                         SourceBadgeView(type: .quark)
                                     }
@@ -74,7 +74,7 @@ struct HomeContinueWatchingView: View {
                                     GeometryReader { geo in
                                         ZStack(alignment: .leading) {
                                             Capsule().fill(Color.white.opacity(0.15))
-                                            Capsule().fill(Color.cyan)
+                                            Capsule().fill(BrandPalette.glassWhite)
                                                 .frame(width: geo.size.width * CGFloat(min(1.0, max(0.05, progress))))
                                         }
                                     }
@@ -170,7 +170,7 @@ struct HistoryScreen: View {
                 ForEach(items) { item in
                     HStack(spacing: 24) {
                         Image(systemName: item.completed ? "checkmark.circle.fill" : "play.circle.fill")
-                            .font(.title2).foregroundStyle(item.completed ? .green : .cyan)
+                            .font(.title2).foregroundStyle(item.completed ? .green : BrandPalette.glassWhite)
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.displayName)
                                 .font(.headline)

@@ -46,7 +46,7 @@ enum FolderBindingBackdropStyle {
 }
 
 enum DrawerButtonFocusStyle {
-    static let focusedScale: CGFloat = 1.06
+    static let focusedScale: CGFloat = 1.05
     static let defaultScale: CGFloat = 1.0
 
     static func scale(isFocused: Bool) -> CGFloat {

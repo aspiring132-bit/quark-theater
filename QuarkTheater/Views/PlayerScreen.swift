@@ -66,7 +66,6 @@ struct PlayerScreen: View {
             // 1. Full-screen Video Player (KSPlayer FFmpeg Sole Engine)
             if let ksURL = coordinator.ksPlayerURL, let ksOptions = coordinator.ksPlayerOptions {
                 KSVideoPlayer(coordinator: coordinator.ksCoordinator, url: ksURL, options: ksOptions)
-                    .id(coordinator.currentPlayingFile.fileId)
                     .ignoresSafeArea()
                     .allowsHitTesting(!showDrawer)
             } else if coordinator.isLoading {
@@ -134,7 +133,7 @@ struct PlayerScreen: View {
                         if coordinator.canPlayNext {
                             Text("· 可直接下一集")
                                 .font(.caption)
-                                .foregroundStyle(.cyan)
+                                .foregroundStyle(BrandPalette.glassWhite)
                         }
                     }
                     .padding(.horizontal, 24)
@@ -378,9 +377,9 @@ struct PlayerScreen: View {
         VStack(spacing: 0) {
             // ── Tab Bar Row ─────────────────────────────────────────────
             HStack(alignment: .center, spacing: 24) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(coordinator.currentPlayingFile.name)
-                        .font(.title3.bold())
+                        .font(.headline.weight(.bold))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text("共 \(coordinator.playlistQueue.count) 集 · 字幕 \(coordinator.subtitleTrackNames.count) 轨 · 音频 \(coordinator.audioTrackNames.count) 轨")
@@ -398,11 +397,11 @@ struct PlayerScreen: View {
                     }
                 }
             }
-            .padding(.horizontal, 36)
+            .padding(.horizontal, 46)
             .padding(.vertical, 18)
 
             Divider()
-                .padding(.horizontal, 28)
+                .padding(.horizontal, 38)
 
             // ── Content Row ─────────────────────────────────────────────
             Group {
@@ -455,18 +454,18 @@ struct PlayerScreen: View {
                     if isFocused {
                         Color.white
                     } else if isSelected {
-                        Color.cyan.opacity(0.28)
+                        BrandPalette.glassWhite.opacity(0.1)
                     } else {
                         Color.white.opacity(0.08)
                     }
                 }
             )
-            .foregroundStyle(isFocused ? Color.black : (isSelected ? Color.cyan : Color.white))
+            .foregroundStyle(isFocused ? Color.black : BrandPalette.glassWhite)
             .clipShape(Capsule())
             .overlay(
                 Capsule()
                     .stroke(
-                        isFocused ? Color.white : (isSelected ? Color.cyan : Color.white.opacity(0.15)),
+                        isFocused ? BrandPalette.glassWhite : (isSelected ? BrandPalette.iceBlue.opacity(0.25) : BrandPalette.glassWhite.opacity(0.15)),
                         lineWidth: isFocused ? 2.5 : (isSelected ? 1.5 : 1)
                     )
             )
@@ -520,7 +519,7 @@ struct PlayerScreen: View {
                         .accessibilityIdentifier("player.episodeCard.\(index)")
                     }
                 }
-                .padding(.horizontal, 32)
+                .padding(.horizontal, 44)
                 .padding(.vertical, 16)
             }
             .onChange(of: focusedTarget) { _, target in
@@ -541,11 +540,11 @@ struct PlayerScreen: View {
             VStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 14)
-                        .fill(isFocused ? Color.cyan : Color.cyan.opacity(0.2))
+                        .fill(isFocused ? BrandPalette.glassWhite : BrandPalette.glassWhite.opacity(0.08))
                         .frame(width: 72, height: 72)
                     Image(systemName: "forward.end.fill")
                         .font(.system(size: 32))
-                        .foregroundStyle(isFocused ? Color.black : Color.cyan)
+                        .foregroundStyle(isFocused ? Color.black : BrandPalette.glassWhite)
                 }
 
                 VStack(spacing: 4) {
@@ -558,14 +557,14 @@ struct PlayerScreen: View {
                 }
             }
             .frame(width: 200, height: 190)
-            .background(isFocused ? Color.white.opacity(0.15) : Color.cyan.opacity(0.08))
+            .background(isFocused ? BrandPalette.glassWhite.opacity(0.15) : BrandPalette.glassWhite.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
-                    .stroke(isFocused ? Color.cyan : Color.cyan.opacity(0.5), lineWidth: isFocused ? 3.5 : 1.5)
+                    .stroke(isFocused ? BrandPalette.glassWhite : BrandPalette.iceBlue.opacity(0.25), lineWidth: isFocused ? 3.5 : 1.5)
             )
             .shadow(
-                color: isFocused ? Color.cyan.opacity(0.55) : Color.clear,
+                color: isFocused ? BrandPalette.iceGlow : Color.clear,
                 radius: 14,
                 x: 0,
                 y: 6
@@ -621,7 +620,7 @@ struct PlayerScreen: View {
                     }
                 }
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 44)
             .padding(.vertical, 16)
         }
     }
@@ -654,7 +653,7 @@ struct PlayerScreen: View {
                     }
                 }
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 44)
             .padding(.vertical, 16)
         }
     }
@@ -673,7 +672,7 @@ struct PlayerScreen: View {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.title3)
-                    .foregroundStyle(isFocused ? Color.black : (isSelected ? Color.cyan : Color.secondary))
+                    .foregroundStyle(isFocused ? Color.black : (isSelected ? BrandPalette.glassWhite : BrandPalette.secondaryText))
                     .frame(width: 28)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -692,7 +691,7 @@ struct PlayerScreen: View {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.subheadline.bold())
-                        .foregroundStyle(isFocused ? Color.black : Color.cyan)
+                        .foregroundStyle(isFocused ? Color.black : BrandPalette.glassWhite)
                 }
             }
             .padding(.horizontal, 18)
@@ -703,7 +702,7 @@ struct PlayerScreen: View {
                     if isFocused {
                         Color.white
                     } else if isSelected {
-                        Color.cyan.opacity(0.2)
+                        BrandPalette.glassWhite.opacity(0.08)
                     } else {
                         Color.white.opacity(0.06)
                     }
@@ -713,7 +712,7 @@ struct PlayerScreen: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
                     .stroke(
-                        isFocused ? Color.white : (isSelected ? Color.cyan : Color.white.opacity(0.12)),
+                        isFocused ? BrandPalette.glassWhite : (isSelected ? BrandPalette.iceBlue.opacity(0.25) : BrandPalette.glassWhite.opacity(0.12)),
                         lineWidth: isFocused ? 2.5 : (isSelected ? 1.5 : 1)
                     )
             )
@@ -735,7 +734,7 @@ struct PlayerScreen: View {
         let speed = coordinator.networkSpeedText
         HStack(spacing: 8) {
             Image(systemName: "bolt.horizontal.fill")
-                .foregroundStyle(.cyan)
+                .foregroundStyle(BrandPalette.glassWhite)
             if coordinator.isBuffering {
                 ProgressView()
                     .progressViewStyle(.circular)
@@ -856,9 +855,9 @@ private struct DrawerEpisodeCard: View {
     }
 
     private var cardBorderColor: Color {
-        if isFocused { return Color.cyan }
+        if isFocused { return BrandPalette.glassWhite }
         if isPending { return Color.orange.opacity(0.8) }
-        if isCurrent { return Color.cyan.opacity(0.7) }
+        if isCurrent { return BrandPalette.iceBlue.opacity(0.3) }
         return Color.white.opacity(0.12)
     }
 
@@ -871,7 +870,7 @@ private struct DrawerEpisodeCard: View {
     private var infoBackgroundColor: Color {
         if isFocused { return Color.white.opacity(0.18) }
         if isPending { return Color.orange.opacity(0.12) }
-        if isCurrent { return Color.cyan.opacity(0.14) }
+        if isCurrent { return BrandPalette.glassWhite.opacity(0.08) }
         return Color.white.opacity(0.06)
     }
 
@@ -891,7 +890,7 @@ private struct DrawerEpisodeCard: View {
     private var infoArea: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(cardTitle)
-                .font(.subheadline.weight(isFocused ? .bold : .medium))
+                .font(.subheadline.weight(isFocused ? .bold : .semibold))
                 .foregroundStyle(isFocused ? Color.white : Color.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -905,7 +904,7 @@ private struct DrawerEpisodeCard: View {
 
                 Text(tagString)
                     .font(.caption2.bold())
-                    .foregroundStyle(isCurrent ? Color.cyan : (isFocused ? Color.white : Color.secondary))
+                    .foregroundStyle(isCurrent ? BrandPalette.glassWhite : (isFocused ? BrandPalette.glassWhite : BrandPalette.secondaryText))
             }
         }
         .padding(.horizontal, 14)
@@ -930,7 +929,7 @@ private struct DrawerEpisodeCard: View {
                     .stroke(cardBorderColor, lineWidth: cardBorderWidth)
             )
             .shadow(
-                color: isFocused ? Color.cyan.opacity(0.6) : Color.black.opacity(0.35),
+                color: isFocused ? BrandPalette.iceBlue.opacity(0.6) : Color.black.opacity(0.35),
                 radius: isFocused ? 14 : 6,
                 x: 0,
                 y: isFocused ? 6 : 2
@@ -964,7 +963,7 @@ private struct DrawerEpisodeCard: View {
             // Center Play Icon (constant size, whole card scales uniformly on focus)
             Image(systemName: isCurrent ? "waveform" : (isPending ? "hourglass" : "play.circle.fill"))
                 .font(.system(size: 28))
-                .foregroundStyle(isCurrent ? Color.cyan : (isPending ? Color.orange : (isFocused ? Color.white : Color.white.opacity(0.65))))
+                .foregroundStyle(isCurrent ? BrandPalette.glassWhite : (isPending ? Color.orange : (isFocused ? BrandPalette.glassWhite : BrandPalette.glassWhite.opacity(0.65))))
                 .shadow(color: .black.opacity(0.8), radius: 4)
 
             // Top Badges
@@ -972,10 +971,10 @@ private struct DrawerEpisodeCard: View {
                 HStack {
                     if isCurrent {
                         HStack(spacing: 4) {
-                            Circle().fill(Color.cyan).frame(width: 6, height: 6)
+                            Circle().fill(BrandPalette.iceBlue).frame(width: 6, height: 6)
                             Text("播放中")
                                 .font(.caption2.bold())
-                                .foregroundStyle(.cyan)
+                                .foregroundStyle(BrandPalette.iceBlue)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -1000,7 +999,7 @@ private struct DrawerEpisodeCard: View {
 
                     Text(file.fileExtension.uppercased())
                         .font(.caption2.bold())
-                        .foregroundStyle(isFocused ? Color.cyan : Color.white.opacity(0.85))
+                        .foregroundStyle(isFocused ? BrandPalette.glassWhite : BrandPalette.glassWhite.opacity(0.85))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
@@ -1015,8 +1014,8 @@ private struct DrawerEpisodeCard: View {
     private var placeholderBackground: some View {
         LinearGradient(
             colors: [
-                Color(red: 0.14, green: 0.17, blue: 0.24),
-                Color(red: 0.08, green: 0.10, blue: 0.16)
+                BrandPalette.secondary,
+                BrandPalette.deepCharcoal
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing

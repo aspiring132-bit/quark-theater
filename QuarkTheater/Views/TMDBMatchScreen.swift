@@ -96,7 +96,7 @@ struct TMDBMatchScreen: View {
                         .font(.system(size: 40, weight: .bold, design: .rounded))
                     Text(displayName).foregroundStyle(.secondary)
                     if relatedFiles.count > 1 {
-                        Text("将同时为当前全部 \(relatedFiles.count) 个分集应用此匹配").font(.caption).foregroundStyle(.cyan)
+                        Text("将同时为当前全部 \(relatedFiles.count) 个分集应用此匹配").font(.caption).foregroundStyle(BrandPalette.glassWhite)
                     }
                 }
 
@@ -154,7 +154,7 @@ struct TMDBMatchScreen: View {
                                     Spacer()
                                     if isSelected {
                                         Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.cyan)
+                                            .foregroundStyle(BrandPalette.glassWhite)
                                             .font(.title2)
                                     }
                                 }
@@ -330,7 +330,7 @@ private struct CandidateCardButtonStyle: ButtonStyle {
             if isFocused {
                 return Color.white.opacity(0.18)
             } else if isSelected {
-                return Color.cyan.opacity(0.15)
+                return BrandPalette.glassWhite.opacity(0.08)
             } else {
                 return Color.white.opacity(0.05)
             }
@@ -340,7 +340,7 @@ private struct CandidateCardButtonStyle: ButtonStyle {
             if isFocused {
                 return Color.white
             } else if isSelected {
-                return Color.cyan
+                return BrandPalette.glassWhite
             } else {
                 return Color.white.opacity(0.1)
             }
@@ -368,9 +368,9 @@ private struct CandidateCardButtonStyle: ButtonStyle {
 
         private var shadowColor: Color {
             if isFocused {
-                return Color.cyan.opacity(0.55)
+                return BrandPalette.iceGlow
             } else if isSelected {
-                return Color.cyan.opacity(0.2)
+                return BrandPalette.iceBlue.opacity(0.08)
             } else {
                 return .clear
             }

@@ -194,7 +194,7 @@ struct FileBrowserScreen: View {
                             Label(name, systemImage: isSelected ? "folder.fill" : "folder")
                         }
                         .buttonStyle(.bordered)
-                        .tint(isSelected ? .cyan : nil)
+                        .tint(isSelected ? BrandPalette.glassWhite : nil)
                     }
                     Button {
                         Task { await model.switchToFolder(id: "0", name: "全部网盘根目录") }
@@ -202,7 +202,7 @@ struct FileBrowserScreen: View {
                         Label("全盘根目录", systemImage: "externaldrive")
                     }
                     .buttonStyle(.bordered)
-                    .tint(model.folders.last?.id == "0" ? .cyan : nil)
+                    .tint(model.folders.last?.id == "0" ? BrandPalette.glassWhite : nil)
                 }
             }
         }

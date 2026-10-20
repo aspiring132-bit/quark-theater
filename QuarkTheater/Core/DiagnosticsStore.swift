@@ -33,6 +33,8 @@ enum DiagnosticEvent: String, Codable, CaseIterable, Sendable {
     case audioSnapshot = "audio.snapshot"
     case audioError = "audio.error"
     case silentMarker = "audio.silent_marker"
+    case playerReadiness = "playback.player_readiness"
+    case firstBufferReady = "playback.first_buffer_ready"
     case legacyMessage = "diagnostics.legacy_message"
 }
 
@@ -151,6 +153,7 @@ enum DiagnosticResolution: String, CaseIterable, Sendable {
 enum DiagnosticPlayerState: String, CaseIterable, Sendable {
     case idle
     case loading
+    case readyToPlay = "ready_to_play"
     case playing
     case paused
     case waiting
@@ -278,6 +281,11 @@ enum DiagnosticMetadata: Hashable, Sendable {
     case episodeOrdinal(Int)
     case episodeNumber(Int)
     case backDisposition(DiagnosticBackDisposition)
+    case switchGeneration(Int)
+    case audioTrackPresent(Bool)
+    case videoTrackPresent(Bool)
+    case videoNaturalSizeAvailable(Bool)
+    case firstBufferReady(Bool)
 
     fileprivate var persistedEntry: (key: String, value: DiagnosticValue)? {
         switch self {
@@ -349,6 +357,16 @@ enum DiagnosticMetadata: Hashable, Sendable {
             return ("episodeNumber", .int(value))
         case .backDisposition(let value):
             return ("backDisposition", .string(value.rawValue))
+        case .switchGeneration(let value) where (0...100_000).contains(value):
+            return ("switchGeneration", .int(value))
+        case .audioTrackPresent(let value):
+            return ("audioTrackPresent", .bool(value))
+        case .videoTrackPresent(let value):
+            return ("videoTrackPresent", .bool(value))
+        case .videoNaturalSizeAvailable(let value):
+            return ("videoNaturalSizeAvailable", .bool(value))
+        case .firstBufferReady(let value):
+            return ("firstBufferReady", .bool(value))
         default:
             return nil
         }
@@ -439,6 +457,13 @@ enum DiagnosticMetadata: Hashable, Sendable {
         case ("episodeNumber", .int(let number)) where (0...10_000).contains(number):
             return value
         case ("backDisposition", .string(let raw)) where DiagnosticBackDisposition(rawValue: raw) != nil:
+            return value
+        case ("switchGeneration", .int(let number)) where (0...100_000).contains(number):
+            return value
+        case ("audioTrackPresent", .bool),
+             ("videoTrackPresent", .bool),
+             ("videoNaturalSizeAvailable", .bool),
+             ("firstBufferReady", .bool):
             return value
         default:
             return nil

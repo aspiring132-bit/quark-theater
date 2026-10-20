@@ -259,7 +259,10 @@ final class PlaybackCoordinator: ObservableObject {
         playbackCorrelationID = diagnostics.makeCorrelationID()
         startedPlaybackGeneration = nil
         if let selectionOrdinal {
-            var metadata: [DiagnosticMetadata] = [.episodeOrdinal(selectionOrdinal)]
+            var metadata: [DiagnosticMetadata] = [
+                .episodeOrdinal(selectionOrdinal),
+                .switchGeneration(requestGeneration)
+            ]
             if let episodeNumber { metadata.append(.episodeNumber(episodeNumber)) }
             diagnostics.record(
                 category: .playback,
@@ -501,8 +504,6 @@ final class PlaybackCoordinator: ObservableObject {
         options.preferredForwardBufferDuration = 3.0
         options.maxBufferDuration = 60.0
 
-        clearReplacementCallbacks()
-
         currentFile = requestedFile
         pendingFile = nil
 
@@ -512,10 +513,6 @@ final class PlaybackCoordinator: ObservableObject {
         // subtitle model. Bind it to the verified resource so stale subtitle
         // entries from the previous episode are cleared and re-discovered.
         ksCoordinator.subtitleModel.url = Self.subtitleResourceURL(for: resource.url)
-        if let playerLayer = ksCoordinator.playerLayer {
-            playerLayer.set(url: resource.url, options: options)
-            playerLayer.play()
-        }
         self.ksAudioOptions = []
         self.ksSubtitleOptions = []
         self.ksSubtitleParts = []
@@ -524,6 +521,8 @@ final class PlaybackCoordinator: ObservableObject {
         self.lastKSSelectedAudioIndex = nil
         self.lastKSSelectedSubtitleIndex = nil
 
+        // Register callbacks FIRST so that any lifecycle or readiness transition
+        // triggered by playerLayer.set(url:options:) or initial play() is reliably captured.
         ksCoordinator.onPlay = { [weak self] current, duration in
             guard let self else { return }
             guard self.generation == requestGeneration, self.currentFile.fileId == requestedFile.fileId else { return }
@@ -538,7 +537,7 @@ final class PlaybackCoordinator: ObservableObject {
             guard self.startedPlaybackGeneration != requestGeneration else { return }
             self.startedPlaybackGeneration = requestGeneration
             var startedMetadata: [DiagnosticMetadata] = [
-                .endpoint(.filePlay), .playerEngine(.unknown)
+                .endpoint(.filePlay), .playerEngine(.unknown), .switchGeneration(requestGeneration)
             ]
             if let ordinal = self.queue.firstIndex(where: { $0.fileId == requestedFile.fileId }) {
                 startedMetadata.append(.episodeOrdinal(ordinal))
@@ -572,11 +571,61 @@ final class PlaybackCoordinator: ObservableObject {
             default:
                 break
             }
+
+            if state == .readyToPlay {
+                let player = self.ksCoordinator.playerLayer?.player
+                let hasAudio = !(player?.tracks(mediaType: .audio).isEmpty ?? true)
+                let hasVideo = !(player?.tracks(mediaType: .video).isEmpty ?? true)
+                let size = player?.naturalSize ?? .zero
+                let hasNaturalSize = size.width > 0 && size.height > 0
+                var readinessMetadata: [DiagnosticMetadata] = [
+                    .switchGeneration(requestGeneration),
+                    .playerState(.readyToPlay),
+                    .audioTrackPresent(hasAudio),
+                    .videoTrackPresent(hasVideo),
+                    .videoNaturalSizeAvailable(hasNaturalSize)
+                ]
+                if let ordinal = self.queue.firstIndex(where: { $0.fileId == requestedFile.fileId }) {
+                    readinessMetadata.append(.episodeOrdinal(ordinal))
+                }
+                self.diagnostics.record(
+                    category: .playback,
+                    level: .info,
+                    event: .playerReadiness,
+                    correlationID: self.playbackCorrelationID,
+                    metadata: readinessMetadata
+                )
+            }
+
             self.recordPlaybackState(level: .debug)
         }
         ksCoordinator.onBufferChanged = { [weak self] bufferedCount, consumeTime in
             guard let self else { return }
             guard self.generation == requestGeneration, self.currentFile.fileId == requestedFile.fileId else { return }
+            if bufferedCount == 0 {
+                let player = self.ksCoordinator.playerLayer?.player
+                let hasAudio = !(player?.tracks(mediaType: .audio).isEmpty ?? true)
+                let hasVideo = !(player?.tracks(mediaType: .video).isEmpty ?? true)
+                let size = player?.naturalSize ?? .zero
+                let hasNaturalSize = size.width > 0 && size.height > 0
+                var firstBufferMetadata: [DiagnosticMetadata] = [
+                    .switchGeneration(requestGeneration),
+                    .firstBufferReady(true),
+                    .audioTrackPresent(hasAudio),
+                    .videoTrackPresent(hasVideo),
+                    .videoNaturalSizeAvailable(hasNaturalSize)
+                ]
+                if let ordinal = self.queue.firstIndex(where: { $0.fileId == requestedFile.fileId }) {
+                    firstBufferMetadata.append(.episodeOrdinal(ordinal))
+                }
+                self.diagnostics.record(
+                    category: .playback,
+                    level: .info,
+                    event: .firstBufferReady,
+                    correlationID: self.playbackCorrelationID,
+                    metadata: firstBufferMetadata
+                )
+            }
             if bufferedCount > 0 && consumeTime > 0 {
                 let speedKB = Double(bufferedCount) / Double(consumeTime) / 1024.0
                 if speedKB > 1024 {
@@ -592,10 +641,12 @@ final class PlaybackCoordinator: ObservableObject {
             if let error { self.handlePlaybackFailure(error) }
             else { self.playbackEnded() }
         }
-        // `pause()` clears KSPlayer's isAutoPlay flag. A replacement URL
-        // therefore needs an explicit play() after set(url:options:) or it
-        // can remain initialized with a frozen last frame.
-        ksCoordinator.playerLayer?.play()
+
+        // Callbacks are fully registered; initiate resource replacement on the mounted playerLayer.
+        if let playerLayer = ksCoordinator.playerLayer {
+            playerLayer.set(url: resource.url, options: options)
+            playerLayer.play()
+        }
     }
 
     private var safePlaybackTime: Double {

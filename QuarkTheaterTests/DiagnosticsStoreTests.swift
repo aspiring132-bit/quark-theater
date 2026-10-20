@@ -77,6 +77,27 @@ final class DiagnosticsStoreTests: XCTestCase {
         XCTAssertEqual(sanitized["episodeNumber"], .int(10))
     }
 
+    func testPlayerReadinessAndSwitchGenerationMetadataAreClosedAndBounded() {
+        XCTAssertEqual(DiagnosticEvent(rawValue: "playback.player_readiness"), .playerReadiness)
+        XCTAssertEqual(DiagnosticEvent(rawValue: "playback.first_buffer_ready"), .firstBufferReady)
+        let sanitized = DiagnosticMetadata.sanitizedForTesting([
+            .switchGeneration(3),
+            .switchGeneration(-1),
+            .switchGeneration(200_000),
+            .audioTrackPresent(true),
+            .videoTrackPresent(false),
+            .videoNaturalSizeAvailable(false),
+            .firstBufferReady(true),
+            .playerState(.readyToPlay)
+        ])
+        XCTAssertEqual(sanitized["switchGeneration"], .int(3))
+        XCTAssertEqual(sanitized["audioTrackPresent"], .bool(true))
+        XCTAssertEqual(sanitized["videoTrackPresent"], .bool(false))
+        XCTAssertEqual(sanitized["videoNaturalSizeAvailable"], .bool(false))
+        XCTAssertEqual(sanitized["firstBufferReady"], .bool(true))
+        XCTAssertEqual(sanitized["playerState"], .string("ready_to_play"))
+    }
+
     func testTypedMetadataRejectsInvalidRangesAndPersistsOnlyClosedStringEnums() async throws {
         let (store, root) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
