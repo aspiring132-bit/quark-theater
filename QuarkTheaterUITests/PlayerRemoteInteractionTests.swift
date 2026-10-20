@@ -121,42 +121,28 @@ final class PlayerRemoteInteractionTests: XCTestCase {
 
         XCUIRemote.shared.press(.down)
         XCTAssertTrue(episodesTab.waitForExistence(timeout: 5), "Drawer did not open")
-        XCTAssertTrue(waitUntil(5) { self.episodesTab.hasFocus }, "Episodes tab not focused after opening drawer")
-
-        XCUIRemote.shared.press(.down)
         XCTAssertTrue(
-            waitUntil(5) { self.app.buttons["player.nextEpisode"].hasFocus },
-            "Down from the tab row must land on the next-episode control"
+            waitUntil(5) { self.app.buttons["player.episodeCard.0"].hasFocus },
+            "Opening the drawer must focus the currently playing episode card"
         )
 
-        // Repeat the one-step focus movement at least three times to detect
-        // nondeterministic focus routing or double-handled remote events.
-        for iteration in 1...3 {
-            XCUIRemote.shared.press(.right)
-            XCTAssertTrue(
-                waitUntil(5) { self.app.buttons["player.episodeCard.0"].hasFocus },
-                "Iteration \(iteration): one right press must focus episodeCard.0"
-            )
-            XCUIRemote.shared.press(.right)
-            XCTAssertTrue(
-                waitUntil(5) { self.app.buttons["player.episodeCard.1"].hasFocus },
-                "Iteration \(iteration): one right press must focus episodeCard.1"
-            )
-            if iteration == 1 {
-                attachScreenshot("drawer-one-step-focus")
-            }
-            XCUIRemote.shared.press(.left)
-            XCTAssertTrue(
-                waitUntil(5) { self.app.buttons["player.episodeCard.0"].hasFocus },
-                "Iteration \(iteration): one left press must move focus back to episodeCard.0"
-            )
-            if iteration < 3 {
-                XCUIRemote.shared.press(.left)
-                XCTAssertTrue(
-                    waitUntil(5) { self.app.buttons["player.nextEpisode"].hasFocus },
-                    "Iteration \(iteration): one left press must move focus back to nextEpisode"
-                )
-            }
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(
+            waitUntil(5) { self.app.buttons["player.episodeCard.1"].hasFocus },
+            "One right press must move focus exactly one episode"
+        )
+        XCUIRemote.shared.press(.left)
+        XCTAssertTrue(
+            waitUntil(5) { self.app.buttons["player.episodeCard.0"].hasFocus },
+            "One left press must move focus exactly one episode back"
+        )
+        XCUIRemote.shared.press(.up)
+        XCTAssertTrue(
+            waitUntil(5) { self.episodesTab.hasFocus },
+            "Up from episode content must restore focus to the selected tab"
+        )
+        if episodesTab.exists {
+            attachScreenshot("drawer-one-step-focus")
         }
 
         XCTAssertEqual(
@@ -204,6 +190,10 @@ final class PlayerRemoteInteractionTests: XCTestCase {
         waitForDurationLoaded()
         XCUIRemote.shared.press(.down)
         XCTAssertTrue(episodesTab.waitForExistence(timeout: 5), "Drawer did not open")
+        XCTAssertTrue(
+            waitUntil(5) { self.app.buttons["player.episodeCard.0"].hasFocus },
+            "Drawer open must place focus in episode content"
+        )
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(
             waitUntil(5) { !self.episodesTab.exists },

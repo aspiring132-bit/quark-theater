@@ -19,6 +19,8 @@ enum DiagnosticLevel: String, Codable, CaseIterable, Sendable {
 
 enum DiagnosticEvent: String, Codable, CaseIterable, Sendable {
     case focusChanged = "navigation.focus_changed"
+    case remoteBack = "navigation.remote_back"
+    case episodeSelectionRequested = "playback.episode_selection_requested"
     case requestCompleted = "cloud.request_completed"
     case requestFailed = "cloud.request_failed"
     case requestFallback = "cloud.request_fallback"
@@ -234,6 +236,12 @@ enum DiagnosticAliasProvenance: String, CaseIterable, Sendable {
     case heuristic
 }
 
+enum DiagnosticBackDisposition: String, CaseIterable, Sendable {
+    case closedDrawer = "closed_drawer"
+    case dismissedPlayer = "dismissed_player"
+    case ignored
+}
+
 /// Closed metadata inputs. Free-form strings, titles, paths, URLs, IDs and localized errors have no case here.
 enum DiagnosticMetadata: Hashable, Sendable {
     case httpStatus(Int)
@@ -268,6 +276,8 @@ enum DiagnosticMetadata: Hashable, Sendable {
     case droppedFrames(Int)
     case focusOrdinal(Int)
     case episodeOrdinal(Int)
+    case episodeNumber(Int)
+    case backDisposition(DiagnosticBackDisposition)
 
     fileprivate var persistedEntry: (key: String, value: DiagnosticValue)? {
         switch self {
@@ -335,6 +345,10 @@ enum DiagnosticMetadata: Hashable, Sendable {
             return ("focusOrdinal", .int(value))
         case .episodeOrdinal(let value) where (0...10_000).contains(value):
             return ("episodeOrdinal", .int(value))
+        case .episodeNumber(let value) where (0...10_000).contains(value):
+            return ("episodeNumber", .int(value))
+        case .backDisposition(let value):
+            return ("backDisposition", .string(value.rawValue))
         default:
             return nil
         }
@@ -418,7 +432,13 @@ enum DiagnosticMetadata: Hashable, Sendable {
             return value
         case ("droppedFrames", .int(let number)) where (0...10_000_000).contains(number):
             return value
-        case ("focusOrdinal", .int(let number)), ("episodeOrdinal", .int(let number)) where (0...10_000).contains(number):
+        case ("focusOrdinal", .int(let number)) where (0...10_000).contains(number):
+            return value
+        case ("episodeOrdinal", .int(let number)) where (0...10_000).contains(number):
+            return value
+        case ("episodeNumber", .int(let number)) where (0...10_000).contains(number):
+            return value
+        case ("backDisposition", .string(let raw)) where DiagnosticBackDisposition(rawValue: raw) != nil:
             return value
         default:
             return nil

@@ -36,6 +36,23 @@ final class QuarkClientTests: XCTestCase {
         XCTAssertNil(restored)
         XCTAssertTrue(transport.requests.isEmpty)
     }
+    func testSimulatorSessionOptInOnlyWhenInjected() async throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let sessionURL = tempDir.appendingPathComponent("session.json")
+        let dummyCookies = [StoredCookie(name: "test_cookie", value: "val", domain: ".quark.cn", path: "/", expires: nil)]
+        try JSONEncoder().encode(dummyCookies).write(to: sessionURL)
+
+        let clientWithoutOptIn = LiveQuarkClient(transport: QueueTransport([]), credentialStore: MemoryCredentials())
+        let restoredWithout = try await clientWithoutOptIn.restoreSession()
+        XCTAssertNil(restoredWithout)
+
+        let transport = QueueTransport([filesReply()])
+        let clientWithOptIn = LiveQuarkClient(transport: transport, credentialStore: MemoryCredentials(), simulatorSessionURL: sessionURL)
+        let restoredWith = try await clientWithOptIn.restoreSession()
+        XCTAssertEqual(restoredWith?.accountId, "quark-local-account")
+    }
     func testQRRequestAndWaitingContract() async throws {
         let transport = QueueTransport([tokenReply, StubReply(json: ["status": 50004001])])
         let client = LiveQuarkClient(transport: transport, credentialStore: MemoryCredentials())
@@ -201,6 +218,7 @@ final class QuarkClientTests: XCTestCase {
     func testDownloadIsEphemeralAndMatchesRequestedFile() async throws {
         let (client, transport, store, _) = try await authenticated()
         let before = store.data
+        transport.replies.append(StubReply(json: ["status": 503, "code": 9001]))
         transport.replies.append(StubReply(json: ["status": 200, "code": 0, "data": [["fid": "f-1", "download_url": "https://media.example.invalid/a.mp4?signature=SYNTHETIC"]]]))
         let resource = try await client.playbackResource(fileID: "f-1")
         XCTAssertNil(resource.expiresAt)

@@ -13,38 +13,40 @@ final class LiveQuarkClient: QuarkClient {
     private var account: Account?
     private var activeChallenge: QRLoginChallenge?
     private var sessionGeneration = 0
+    private let simulatorSessionURL: URL?
     private static let api = "https://drive-pc.quark.cn/1/clouddrive"
     private static let defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
     private static let desktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch"
     // A local waiting limit, not an asserted server QR validity period.
     static let localQRCodeTimeout: TimeInterval = 300
 
-    convenience init(diagnostics: Diagnostics? = nil) throws {
-        self.init(transport: URLSessionQuarkTransport(), credentialStore: KeychainCredentialStore(), diagnostics: diagnostics)
+    convenience init(diagnostics: Diagnostics? = nil, simulatorSessionURL: URL? = nil) throws {
+        self.init(transport: URLSessionQuarkTransport(), credentialStore: KeychainCredentialStore(),
+                  diagnostics: diagnostics, simulatorSessionURL: simulatorSessionURL)
     }
 
     init(transport: any QuarkHTTPTransport, credentialStore: any CredentialStore,
-         now: @escaping () -> Date = Date.init, diagnostics: Diagnostics? = nil) {
+         now: @escaping () -> Date = Date.init, diagnostics: Diagnostics? = nil,
+         simulatorSessionURL: URL? = nil) {
         self.transport = transport
         self.credentialStore = credentialStore
         self.now = now
         self.diagnostics = diagnostics
+        self.simulatorSessionURL = simulatorSessionURL
     }
 
     func restoreSession() async throws -> Account? {
         var candidateCookies: [HTTPCookie] = []
         var candidateAccount: Account? = nil
 
-        #if targetEnvironment(simulator)
-        let localPath = "/Users/wangbin/.quark_theater_session.json"
-        if FileManager.default.fileExists(atPath: localPath),
-           let raw = try? Data(contentsOf: URL(fileURLWithPath: localPath)),
+        if let simulatorSessionURL,
+           FileManager.default.fileExists(atPath: simulatorSessionURL.path),
+           let raw = try? Data(contentsOf: simulatorSessionURL),
            let list = try? JSONDecoder().decode([StoredCookie].self, from: raw) {
             candidateCookies = list.compactMap { $0.toHTTPCookie() }
             candidateAccount = Account(accountId: "quark-local-account", displayName: "夸克账号", authenticationState: .authenticated)
             Self.logger.info("📱 [Simulator] loaded local session cookies")
         }
-        #endif
 
         if candidateCookies.isEmpty, let data = try credentialStore.load() {
             if let stored = try? JSONDecoder().decode(StoredQuarkSession.self, from: data) {
@@ -74,19 +76,25 @@ final class LiveQuarkClient: QuarkClient {
             try persistSession()
             return account
         } catch {
-            if let qe = error as? QuarkError, qe == .authenticationRequired {
-            Self.logger.error("❌ session rejected (authentication required)")
-                account = nil
-                cookies.removeAll()
-                try? credentialStore.delete()
-                throw error
-            } else {
-                // Temporary network glitch / timeout / offline.
-                // Keep the account as authenticated so user is NOT kicked back to login screen!
-                Self.logger.warning("⚠️ session check unavailable; retaining local session")
-                account = acc
-                return account
+            if let qe = error as? QuarkError {
+                if qe == .authenticationRequired {
+                    Self.logger.error("❌ session rejected (authentication required)")
+                    account = nil
+                    cookies.removeAll()
+                    try? credentialStore.delete()
+                    throw error
+                } else if qe == .forbidden {
+                    Self.logger.error("🚫 session rejected (forbidden)")
+                    account = nil
+                    cookies.removeAll()
+                    throw error
+                }
             }
+            // Temporary network glitch / timeout / offline.
+            // Keep the account as authenticated so user is NOT kicked back to login screen!
+            Self.logger.warning("⚠️ session check unavailable; retaining local session")
+            account = acc
+            return account
         }
     }
 
@@ -290,10 +298,9 @@ final class LiveQuarkClient: QuarkClient {
         sessionGeneration &+= 1
         defer { account = nil; cookies.removeAll(); activeChallenge = nil }
         try credentialStore.delete()
-        #if targetEnvironment(simulator)
-        let localPath = "/Users/wangbin/.quark_theater_session.json"
-        try? FileManager.default.removeItem(atPath: localPath)
-        #endif
+        if let simulatorSessionURL {
+            try? FileManager.default.removeItem(at: simulatorSessionURL)
+        }
         Self.logger.info("🚪 已退出登录，清除会话凭据")
     }
 
@@ -301,16 +308,15 @@ final class LiveQuarkClient: QuarkClient {
         guard let account else { return }
         let stored = StoredQuarkSession(account: account, cookies: cookies)
         try credentialStore.save(JSONEncoder().encode(stored))
-        #if targetEnvironment(simulator)
-        let localPath = "/Users/wangbin/.quark_theater_session.json"
-        let list = cookies.map { c in
-            StoredCookie(name: c.name, value: c.value, domain: c.domain, path: c.path,
-                         expires: c.expiresDate?.timeIntervalSince1970)
+        if let simulatorSessionURL {
+            let list = cookies.map { c in
+                StoredCookie(name: c.name, value: c.value, domain: c.domain, path: c.path,
+                             expires: c.expiresDate?.timeIntervalSince1970)
+            }
+            if let raw = try? JSONEncoder().encode(list) {
+                try? raw.write(to: simulatorSessionURL)
+            }
         }
-        if let raw = try? JSONEncoder().encode(list) {
-            try? raw.write(to: URL(fileURLWithPath: localPath))
-        }
-        #endif
     }
 
     private func loginQuery() -> [String: String] {
@@ -513,22 +519,21 @@ final class LiveQuarkClient: QuarkClient {
     static func cookie(_ cookie: HTTPCookie, matches url: URL, at now: Date) -> Bool {
         guard let host = url.host?.lowercased(), cookie.expiresDate.map({ $0 > now }) ?? true else { return false }
         if cookie.isSecure && url.scheme?.lowercased() != "https" { return false }
-        
-        let hostIsQuark = host == "quark.cn" || host.hasSuffix(".quark.cn")
+
         let domain = cookie.domain.lowercased()
-        let cookieIsQuark = domain.contains("quark.cn")
-        
-        // Any cookie issued by Quark (*.quark.cn) matches all Quark endpoints
-        if hostIsQuark && cookieIsQuark {
-            return true
-        }
-        
         let clean = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
-        let hostMatches = host == clean || host.hasSuffix("." + clean)
+
+        // Legitimate Quark endpoints: either exact domain or subdomains (e.g. pan.quark.cn matches .quark.cn)
+        let hostIsQuark = host == "quark.cn" || host.hasSuffix(".quark.cn")
+        let cookieIsQuark = domain == ".quark.cn" || domain == "quark.cn"
+        let hostMatches = (hostIsQuark && cookieIsQuark) || host == clean || host.hasSuffix("." + clean)
+
+        guard hostMatches else { return false }
+
         let path = url.path.isEmpty ? "/" : url.path
         let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
         let pathMatches = path == cookiePath || (path.hasPrefix(cookiePath) && (cookiePath.hasSuffix("/") || path.dropFirst(cookiePath.count).hasPrefix("/")))
-        return hostMatches && pathMatches
+        return pathMatches
     }
 
     private func members(_ value: [String: Any]) -> [String: Any]? {
@@ -543,11 +548,13 @@ final class LiveQuarkClient: QuarkClient {
     }
 
     private func requireAccountSuccess(_ value: [String: Any]) throws {
+        let status = integer(value["status"])
+        let code = integer(value["code"])
         guard Self.isBusinessSuccess(endpoint: .accountInfo,
-                                     status: integer(value["status"]),
-                                     code: integer(value["code"])) else {
-            let status = integer(value["status"]) ?? integer(value["code"]) ?? -1
-            throw QuarkError.server(code: status, message: "账号交换服务拒绝请求")
+                                     status: status,
+                                     code: code) else {
+            let errorCode = (code != nil && code != 0) ? code! : (status ?? -1)
+            throw QuarkError.server(code: errorCode, message: "账号交换服务拒绝请求")
         }
     }
 

@@ -66,6 +66,7 @@ struct PlayerScreen: View {
             // 1. Full-screen Video Player (KSPlayer FFmpeg Sole Engine)
             if let ksURL = coordinator.ksPlayerURL, let ksOptions = coordinator.ksPlayerOptions {
                 KSVideoPlayer(coordinator: coordinator.ksCoordinator, url: ksURL, options: ksOptions)
+                    .id(coordinator.currentPlayingFile.fileId)
                     .ignoresSafeArea()
                     .allowsHitTesting(!showDrawer)
             } else if coordinator.isLoading {
@@ -193,6 +194,9 @@ struct PlayerScreen: View {
                    let ordinal = coordinator.playlistQueue.firstIndex(where: { $0.fileId == fileID }) {
                     metadata.append(.focusOrdinal(ordinal))
                     metadata.append(.episodeOrdinal(ordinal))
+                    if let episodeNumber = episodeMetadataByFileID[fileID]?.episodeNumber {
+                        metadata.append(.episodeNumber(episodeNumber))
+                    }
                 }
                 diagnostics.record(category: .navigation, level: .debug, event: .focusChanged,
                                    correlationID: coordinator.playbackCorrelation,
@@ -209,17 +213,39 @@ struct PlayerScreen: View {
             coordinator.togglePlayPause()
         }
         .onExitCommand {
-            if showDrawer {
+            let action = PlayerInputReducer.handleBack(state: currentInputState)
+            var metadata: [DiagnosticMetadata] = [
+                .backDisposition(showDrawer ? .closedDrawer : .dismissedPlayer)
+            ]
+            let playingID = coordinator.currentPlayingFile.fileId
+            if let ordinal = coordinator.playlistQueue.firstIndex(where: { $0.fileId == playingID }) {
+                metadata.append(.episodeOrdinal(ordinal))
+            }
+            if let episodeNumber = episodeMetadataByFileID[playingID]?.episodeNumber {
+                metadata.append(.episodeNumber(episodeNumber))
+            }
+            diagnostics.record(
+                category: .navigation,
+                level: .debug,
+                event: .remoteBack,
+                correlationID: coordinator.playbackCorrelation,
+                metadata: metadata
+            )
+            switch action {
+            case .closeDrawer:
                 closeDrawer()
-            } else {
-                dismiss()
+            case .focusTarget(let target):
+                focusedTarget = target
+            default:
+                if !showDrawer {
+                    dismiss()
+                }
             }
         }
     }
 
-    // MARK: - Remote Navigation Handler
-    private func handleMoveCommand(_ direction: MoveCommandDirection) {
-        let state = PlayerInputState(
+    private var currentInputState: PlayerInputState {
+        PlayerInputState(
             isDrawerOpen: showDrawer,
             selectedDrawerTab: selectedDrawerTab.rawValue,
             focusedTarget: focusedTarget,
@@ -227,9 +253,15 @@ struct PlayerScreen: View {
             currentPlaybackTime: 0,
             duration: 0,
             episodeFileIDs: coordinator.playlistQueue.map(\.fileId),
+            currentEpisodeFileID: coordinator.currentPlayingFile.fileId,
             subtitleTrackIDs: ["off"] + coordinator.subtitleTrackNames.indices.map(String.init),
             audioTrackIDs: coordinator.audioTrackNames.indices.map(String.init)
         )
+    }
+
+    // MARK: - Remote Navigation Handler
+    private func handleMoveCommand(_ direction: MoveCommandDirection) {
+        let state = currentInputState
         let action = PlayerInputReducer.reduce(state: state, direction: direction, seekInterval: PlayerSeekPreference.current)
         switch action {
         case .openDrawer:
@@ -262,6 +294,10 @@ struct PlayerScreen: View {
     private var defaultContentTarget: PlayerFocusTarget? {
         switch selectedDrawerTab {
         case .episodes:
+            let currentFileID = coordinator.currentPlayingFile.fileId
+            if coordinator.playlistQueue.contains(where: { $0.fileId == currentFileID }) {
+                return .episode(currentFileID)
+            }
             if coordinator.canPlayNext { return .nextEpisode }
             return coordinator.playlistQueue.first.map { .episode($0.fileId) }
         case .subtitles:
@@ -281,7 +317,9 @@ struct PlayerScreen: View {
         loadEpisodeArtwork()
         // Give a brief moment for views to appear, then set focus
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            focusedTarget = .drawerTab(selectedDrawerTab.rawValue)
+            focusedTarget = selectedDrawerTab == .episodes
+                ? .episode(coordinator.currentPlayingFile.fileId)
+                : .drawerTab(selectedDrawerTab.rawValue)
         }
     }
 
@@ -329,7 +367,8 @@ struct PlayerScreen: View {
         }
         focusedTarget = nil
         DispatchQueue.main.async {
-            if !showDrawer { focusedTarget = .drawerTrigger }
+            guard !showDrawer else { return }
+            focusedTarget = .drawerTrigger
         }
     }
 
@@ -373,10 +412,11 @@ struct PlayerScreen: View {
                 case .audio: audioView
                 }
             }
-            .frame(minHeight: 240)
+            .frame(minHeight: 180, maxHeight: 300)
             .padding(.top, 8)
         }
         .padding(.bottom, 24)
+        .frame(maxWidth: 1600, maxHeight: 500, alignment: .bottom)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
         .overlay(
             RoundedRectangle(cornerRadius: 28)
@@ -430,10 +470,10 @@ struct PlayerScreen: View {
                         lineWidth: isFocused ? 2.5 : (isSelected ? 1.5 : 1)
                     )
             )
-            .scaleEffect(isFocused ? 1.08 : 1.0)
+            .scaleEffect(DrawerButtonFocusStyle.scale(isFocused: isFocused))
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .focused($focusedTarget, equals: .drawerTab(tab.rawValue))
         .accessibilityIdentifier("player.tab.\(tab.rawValue)")
     }
@@ -449,9 +489,9 @@ struct PlayerScreen: View {
     // MARK: - Episodes Content Row
     @ViewBuilder
     private var episodesView: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            ScrollViewReader { proxy in
-                HStack(spacing: 20) {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 20) {
                     if coordinator.canPlayNext {
                         nextEpisodeButton
                     }
@@ -460,12 +500,18 @@ struct PlayerScreen: View {
                         DrawerEpisodeCard(
                             file: file,
                             parsedMetadata: episodeMetadataByFileID[file.fileId],
-                            isCurrent: file.fileId == coordinator.currentPlayingFile.fileId,
+                            isCurrent: coordinator.isCurrentPlaybackStarted && file.fileId == coordinator.currentPlayingFile.fileId,
+                            isPending: file.fileId == coordinator.pendingFile?.fileId
+                                || (coordinator.isPlaybackTransitionActive && file.fileId == coordinator.currentPlayingFile.fileId),
                             isTargetFocused: focusedTarget == .episode(file.fileId),
                             // Fallback chain: episode still → series backdrop → placeholder.
                             artworkURL: stillURLByFileID[file.fileId] ?? backdropURL
                         ) {
-                            coordinator.playFile(file)
+                            coordinator.playFile(
+                                file,
+                                selectionOrdinal: index,
+                                episodeNumber: episodeMetadataByFileID[file.fileId]?.episodeNumber
+                            )
                             closeDrawer()
                         }
                         .id(PlayerFocusTarget.episode(file.fileId))
@@ -476,12 +522,11 @@ struct PlayerScreen: View {
                 }
                 .padding(.horizontal, 32)
                 .padding(.vertical, 16)
-                .onChange(of: focusedTarget) { _, target in
-                    if let target {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            proxy.scrollTo(target, anchor: .center)
-                        }
-                    }
+            }
+            .onChange(of: focusedTarget) { _, target in
+                guard let target else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    proxy.scrollTo(target, anchor: .center)
                 }
             }
         }
@@ -490,7 +535,7 @@ struct PlayerScreen: View {
     private var nextEpisodeButton: some View {
         let isFocused = focusedTarget == .nextEpisode
         return Button {
-            coordinator.playNext()
+            coordinator.playNext(manualSelection: true)
             closeDrawer()
         } label: {
             VStack(spacing: 12) {
@@ -525,10 +570,10 @@ struct PlayerScreen: View {
                 x: 0,
                 y: 6
             )
-            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .scaleEffect(DrawerButtonFocusStyle.scale(isFocused: isFocused))
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .id(PlayerFocusTarget.nextEpisode)
         .focused($focusedTarget, equals: .nextEpisode)
         .accessibilityIdentifier("player.nextEpisode")
@@ -538,55 +583,46 @@ struct PlayerScreen: View {
     @ViewBuilder
     private var subtitlesView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            ScrollViewReader { proxy in
-                HStack(spacing: 16) {
-                    let isOff = coordinator.selectedSubtitleIndex == nil
-                    let isOffFocused = focusedTarget == .subtitle("off")
-                    subtitleAudioCard(
-                        icon: isOff ? "checkmark.circle.fill" : "circle",
-                        title: "关闭字幕",
-                        subtitle: "关",
-                        isSelected: isOff,
-                        isFocused: isOffFocused
-                    ) {
-                        coordinator.selectSubtitle(nil)
-                    }
-                    .id(PlayerFocusTarget.subtitle("off"))
-                    .focused($focusedTarget, equals: .subtitle("off"))
-
-                    let names = coordinator.subtitleTrackNames
-                    if names.isEmpty {
-                        Text("未检测到内嵌字幕轨，支持外挂 SRT/ASS 格式。")
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 24)
-                    } else {
-                        ForEach(names.indices, id: \.self) { index in
-                            let isSelected = coordinator.selectedSubtitleIndex == index
-                            let isFocused = focusedTarget == .subtitle(String(index))
-                            subtitleAudioCard(
-                                icon: isSelected ? "checkmark.circle.fill" : "circle",
-                                title: names[index],
-                                subtitle: "字幕轨 #\(index + 1)",
-                                isSelected: isSelected,
-                                isFocused: isFocused
-                            ) {
-                                coordinator.selectSubtitle(index)
-                            }
-                            .id(PlayerFocusTarget.subtitle(String(index)))
-                            .focused($focusedTarget, equals: .subtitle(String(index)))
-                        }
-                    }
+            HStack(spacing: 16) {
+                let isOff = coordinator.selectedSubtitleIndex == nil
+                let isOffFocused = focusedTarget == .subtitle("off")
+                subtitleAudioCard(
+                    icon: isOff ? "checkmark.circle.fill" : "circle",
+                    title: "关闭字幕",
+                    subtitle: "关",
+                    isSelected: isOff,
+                    isFocused: isOffFocused
+                ) {
+                    coordinator.selectSubtitle(nil)
                 }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 16)
-                .onChange(of: focusedTarget) { _, target in
-                    if let target {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            proxy.scrollTo(target, anchor: .center)
+                .id(PlayerFocusTarget.subtitle("off"))
+                .focused($focusedTarget, equals: .subtitle("off"))
+
+                let names = coordinator.subtitleTrackNames
+                if names.isEmpty {
+                    Text("未检测到内嵌字幕轨，支持外挂 SRT/ASS 格式。")
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 24)
+                } else {
+                    ForEach(names.indices, id: \.self) { index in
+                        let isSelected = coordinator.selectedSubtitleIndex == index
+                        let isFocused = focusedTarget == .subtitle(String(index))
+                        subtitleAudioCard(
+                            icon: isSelected ? "checkmark.circle.fill" : "circle",
+                            title: names[index],
+                            subtitle: "字幕轨 #\(index + 1)",
+                            isSelected: isSelected,
+                            isFocused: isFocused
+                        ) {
+                            coordinator.selectSubtitle(index)
                         }
+                        .id(PlayerFocusTarget.subtitle(String(index)))
+                        .focused($focusedTarget, equals: .subtitle(String(index)))
                     }
                 }
             }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 16)
         }
     }
 
@@ -594,41 +630,32 @@ struct PlayerScreen: View {
     @ViewBuilder
     private var audioView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            ScrollViewReader { proxy in
-                HStack(spacing: 16) {
-                    let names = coordinator.audioTrackNames
-                    if names.isEmpty {
-                        Text("当前使用系统默认立体声音频流。")
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 24)
-                    } else {
-                        ForEach(names.indices, id: \.self) { index in
-                            let isSelected = coordinator.selectedAudioIndex == index
-                            let isFocused = focusedTarget == .audio(String(index))
-                            subtitleAudioCard(
-                                icon: isSelected ? "speaker.wave.3.fill" : "speaker.wave.1",
-                                title: names[index],
-                                subtitle: "音轨 #\(index + 1)",
-                                isSelected: isSelected,
-                                isFocused: isFocused
-                            ) {
-                                coordinator.selectAudio(index)
-                            }
-                            .id(PlayerFocusTarget.audio(String(index)))
-                            .focused($focusedTarget, equals: .audio(String(index)))
+            HStack(spacing: 16) {
+                let names = coordinator.audioTrackNames
+                if names.isEmpty {
+                    Text("当前使用系统默认立体声音频流。")
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 24)
+                } else {
+                    ForEach(names.indices, id: \.self) { index in
+                        let isSelected = coordinator.selectedAudioIndex == index
+                        let isFocused = focusedTarget == .audio(String(index))
+                        subtitleAudioCard(
+                            icon: isSelected ? "speaker.wave.3.fill" : "speaker.wave.1",
+                            title: names[index],
+                            subtitle: "音轨 #\(index + 1)",
+                            isSelected: isSelected,
+                            isFocused: isFocused
+                        ) {
+                            coordinator.selectAudio(index)
                         }
-                    }
-                }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 16)
-                .onChange(of: focusedTarget) { _, target in
-                    if let target {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            proxy.scrollTo(target, anchor: .center)
-                        }
+                        .id(PlayerFocusTarget.audio(String(index)))
+                        .focused($focusedTarget, equals: .audio(String(index)))
                     }
                 }
             }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 16)
         }
     }
 
@@ -696,10 +723,10 @@ struct PlayerScreen: View {
                 x: 0,
                 y: 4
             )
-            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .scaleEffect(DrawerButtonFocusStyle.scale(isFocused: isFocused))
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Speed Badge View
@@ -804,6 +831,7 @@ private struct DrawerEpisodeCard: View {
     let file: CloudFile
     let parsedMetadata: ParsedMediaName?
     let isCurrent: Bool
+    let isPending: Bool
     let isTargetFocused: Bool
     /// Already-resolved artwork for this card: the episode's TMDB still when
     /// known, otherwise the series backdrop, otherwise nil for a placeholder.
@@ -829,6 +857,7 @@ private struct DrawerEpisodeCard: View {
 
     private var cardBorderColor: Color {
         if isFocused { return Color.cyan }
+        if isPending { return Color.orange.opacity(0.8) }
         if isCurrent { return Color.cyan.opacity(0.7) }
         return Color.white.opacity(0.12)
     }
@@ -841,6 +870,7 @@ private struct DrawerEpisodeCard: View {
 
     private var infoBackgroundColor: Color {
         if isFocused { return Color.white.opacity(0.18) }
+        if isPending { return Color.orange.opacity(0.12) }
         if isCurrent { return Color.cyan.opacity(0.14) }
         return Color.white.opacity(0.06)
     }
@@ -905,10 +935,10 @@ private struct DrawerEpisodeCard: View {
                 x: 0,
                 y: isFocused ? 6 : 2
             )
-            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .scaleEffect(DrawerButtonFocusStyle.scale(isFocused: isFocused))
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -931,10 +961,10 @@ private struct DrawerEpisodeCard: View {
                 endPoint: .bottom
             )
 
-            // Center Play Icon (grows on focus)
-            Image(systemName: isCurrent ? "waveform" : "play.circle.fill")
-                .font(.system(size: isFocused ? 34 : 26))
-                .foregroundStyle(isCurrent ? Color.cyan : (isFocused ? Color.white : Color.white.opacity(0.65)))
+            // Center Play Icon (constant size, whole card scales uniformly on focus)
+            Image(systemName: isCurrent ? "waveform" : (isPending ? "hourglass" : "play.circle.fill"))
+                .font(.system(size: 28))
+                .foregroundStyle(isCurrent ? Color.cyan : (isPending ? Color.orange : (isFocused ? Color.white : Color.white.opacity(0.65))))
                 .shadow(color: .black.opacity(0.8), radius: 4)
 
             // Top Badges
@@ -950,6 +980,13 @@ private struct DrawerEpisodeCard: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(.ultraThinMaterial, in: Capsule())
+                    } else if isPending {
+                        Text("切换中")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial, in: Capsule())
                     } else if let ep = parsed.episodeNumber {
                         Text("第 \(ep) 集")
                             .font(.caption2.bold())

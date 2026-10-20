@@ -93,4 +93,21 @@ final class FocusNavigationTests: XCTestCase {
         XCTAssertEqual(HistoryFocusReducer.successor(after: "c", in: records), "b")
         XCTAssertNil(HistoryFocusReducer.successor(after: "a", in: [records[0]]))
     }
+
+    func testFolderBindingBackdropStyleBlursAndDimsWhenPresented() {
+        XCTAssertGreaterThanOrEqual(FolderBindingBackdropStyle.blur(isPresented: true), 20)
+        XCTAssertGreaterThanOrEqual(FolderBindingBackdropStyle.dimming(isPresented: true), 0.7)
+    }
+
+    func testFolderBindingBackdropStyleIsClearWhenDismissed() {
+        XCTAssertEqual(FolderBindingBackdropStyle.blur(isPresented: false), 0)
+        XCTAssertEqual(FolderBindingBackdropStyle.dimming(isPresented: false), 0)
+    }
+
+    func testDrawerButtonFocusStyleScaling() {
+        XCTAssertEqual(DrawerButtonFocusStyle.scale(isFocused: false), 1.0)
+        XCTAssertGreaterThan(DrawerButtonFocusStyle.scale(isFocused: true), 1.0)
+        XCTAssertEqual(DrawerButtonFocusStyle.scale(isFocused: true), 1.06, accuracy: 0.02)
+        XCTAssertTrue(DrawerButtonFocusStyle.prefersPlainButtonStyle)
+    }
 }

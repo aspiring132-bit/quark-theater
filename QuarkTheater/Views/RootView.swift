@@ -23,29 +23,39 @@ struct RootView: View {
             if model.account == nil {
                 cinemaTab
             } else {
-                // MARK: - 1. Screen Contents (Extends completely to Y=0 top edge)
-                Group {
-                    switch selectedTab {
-                    case .media:
-                        cinemaTab
-                    case .sources:
-                        sourcesTab
-                    case .settings:
-                        SettingsScreen(
-                            model: model,
-                            history: history,
-                            mediaCatalog: mediaCatalog,
-                            onBackToCinema: { selectedTab = .media }
-                        )
-                        // Handover task 1a: widen the gap below the floating dock so it
-                        // never overlaps Settings content on smaller/odd-ratio screens.
-                        .padding(.top, 140)
+                ZStack(alignment: .top) {
+                    // MARK: - 1. Screen Contents (Extends completely to Y=0 top edge)
+                    Group {
+                        switch selectedTab {
+                        case .media:
+                            cinemaTab
+                        case .sources:
+                            sourcesTab
+                        case .settings:
+                            SettingsScreen(
+                                model: model,
+                                history: history,
+                                mediaCatalog: mediaCatalog,
+                                onBackToCinema: { selectedTab = .media }
+                            )
+                            // Handover task 1a: widen the gap below the floating dock so it
+                            // never overlaps Settings content on smaller/odd-ratio screens.
+                            .padding(.top, 140)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    // MARK: - 2. Full-Width FocusSection Floating Dock Bar
+                    dockContainer
+                }
+                .blur(radius: FolderBindingBackdropStyle.blur(isPresented: showFolderSelection))
+                .overlay {
+                    if showFolderSelection {
+                        Color.black.opacity(FolderBindingBackdropStyle.dimming(isPresented: true))
+                            .ignoresSafeArea()
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                // MARK: - 2. Full-Width FocusSection Floating Dock Bar
-                dockContainer
+                .animation(.easeInOut(duration: 0.3), value: showFolderSelection)
             }
         }
         .ignoresSafeArea()

@@ -165,6 +165,127 @@ final class CodexUpdateTests: XCTestCase {
         )
     }
 
+    func testDrawerBackClosesDrawerFromEveryFocusLevel() {
+        // Back is a drawer dismissal action regardless of the focused control.
+        let episodeContentState = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: .episode("ep5"),
+            canPlayNext: true,
+            currentPlaybackTime: 100,
+            duration: 3600,
+            episodeFileIDs: ["ep1", "ep2", "ep3", "ep4", "ep5"]
+        )
+        let backFromEpisode = PlayerInputReducer.handleBack(state: episodeContentState)
+        XCTAssertEqual(backFromEpisode, .closeDrawer)
+
+        let subtitleContentState = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "字幕",
+            focusedTarget: .subtitle("1"),
+            canPlayNext: false,
+            currentPlaybackTime: 100,
+            duration: 3600
+        )
+        let backFromSubtitle = PlayerInputReducer.handleBack(state: subtitleContentState)
+        XCTAssertEqual(backFromSubtitle, .closeDrawer)
+
+        let audioContentState = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "音轨",
+            focusedTarget: .audio("2"),
+            canPlayNext: false,
+            currentPlaybackTime: 100,
+            duration: 3600
+        )
+        let backFromAudio = PlayerInputReducer.handleBack(state: audioContentState)
+        XCTAssertEqual(backFromAudio, .closeDrawer)
+
+        // Tab level also closes the drawer.
+        let tabState = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: .drawerTab("选集"),
+            canPlayNext: true,
+            currentPlaybackTime: 100,
+            duration: 3600
+        )
+        let backFromTab = PlayerInputReducer.handleBack(state: tabState)
+        XCTAssertEqual(backFromTab, .closeDrawer)
+
+        // Drawer closed: Back is not handled by drawer reducer (.none), player can exit.
+        let closedState = PlayerInputState(
+            isDrawerOpen: false,
+            selectedDrawerTab: "选集",
+            focusedTarget: .drawerTrigger,
+            canPlayNext: true,
+            currentPlaybackTime: 100,
+            duration: 3600
+        )
+        let backWhenClosed = PlayerInputReducer.handleBack(state: closedState)
+        XCTAssertEqual(backWhenClosed, .none)
+
+        // Any unexpected focus in drawer still closes the drawer instead of exiting player.
+        let nilFocusState = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: nil,
+            canPlayNext: true,
+            currentPlaybackTime: 100,
+            duration: 3600
+        )
+        let backFromNil = PlayerInputReducer.handleBack(state: nilFocusState)
+        XCTAssertEqual(backFromNil, .closeDrawer)
+    }
+
+    func testDrawerDefaultEpisodeFocusPrefersCurrentPlayingFile() {
+        XCTAssertEqual(
+            PlayerInputReducer.defaultContentTarget(
+                tab: "选集",
+                canPlayNext: true,
+                episodeFileIDs: ["ep1", "ep5"],
+                currentEpisodeFileID: "ep5"
+            ),
+            .episode("ep5")
+        )
+        XCTAssertEqual(
+            PlayerInputReducer.defaultContentTarget(
+                tab: "选集",
+                canPlayNext: true,
+                episodeFileIDs: ["ep1", "ep5"],
+                currentEpisodeFileID: nil
+            ),
+            .nextEpisode
+        )
+    }
+
+    func testDrawerUpHierarchyReturnsFromContentToTabAndTabDoesNotClose() {
+        // Up from episode content returns to tab
+        let contentState = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: .episode("ep5"),
+            canPlayNext: false,
+            currentPlaybackTime: 100,
+            duration: 3600,
+            episodeFileIDs: ["ep5"]
+        )
+        let upFromContent = PlayerInputReducer.reduce(state: contentState, direction: .up, seekInterval: 10)
+        XCTAssertEqual(upFromContent, .focusTarget(.drawerTab("选集")))
+
+        // Up from tab stays on tab level, does not close drawer
+        let tabState = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: .drawerTab("选集"),
+            canPlayNext: false,
+            currentPlaybackTime: 100,
+            duration: 3600
+        )
+        let upFromTab = PlayerInputReducer.reduce(state: tabState, direction: .up, seekInterval: 10)
+        XCTAssertEqual(upFromTab, .none)
+    }
+
     func testEpisodeMetadataProjectionPrefersConfirmedValuesAndLeavesUnknownUnresolved() {
         let parsed = ParsedMediaName(title: "Show", mediaType: .series,
                                      seasonNumber: 1, episodeNumber: 1, inferredFromParent: false)
@@ -285,6 +406,155 @@ final class CodexUpdateTests: XCTestCase {
                 targetFileID: "episode-a", currentFileID: "episode-a", pendingFileID: nil
             )
         ))
+    }
+
+    func testEpisodeSelectionSwitchesPendingAndCommittedPlaybackFile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quark-coordinator-\(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
+        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
+
+        let ep1 = CloudFile(fileId: "ep1", parentId: "show", name: "Show.S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep5 = CloudFile(fileId: "ep5", parentId: "show", name: "Show.S01E05.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+
+        let ep1Resource = PlaybackResource(
+            fileID: "ep1",
+            url: URL(string: "https://pan.quark.cn/stream/ep1.mp4")!,
+            cookies: [],
+            requiredHTTPHeaders: [:],
+            expiresAt: nil
+        )
+        let ep5Resource = PlaybackResource(
+            fileID: "ep5",
+            url: URL(string: "https://pan.quark.cn/stream/ep5.mp4")!,
+            cookies: [],
+            requiredHTTPHeaders: [:],
+            expiresAt: nil
+        )
+
+        let stubClient = EpisodeSwitchStubClient()
+        let coordinator = PlaybackCoordinator(
+            client: stubClient,
+            accountID: "account-1",
+            file: ep1,
+            queue: [ep1, ep5],
+            history: history,
+            diagnostics: diagnostics
+        )
+
+        // 1. Initial play started for ep1 (stub holds ep1 continuation to simulate slow resolution)
+        let ep1StartTask = Task { await coordinator.start() }
+        for _ in 0..<20 {
+            if stubClient.requestedFileIDs.contains("ep1") { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(stubClient.requestedFileIDs, ["ep1"])
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertNil(coordinator.ksPlayerURL)
+
+        // 2. User selects episode 5 in drawer (ep5 network in flight)
+        let switchTask = coordinator.playFile(ep5, selectionOrdinal: 1, episodeNumber: 5)
+        for _ in 0..<20 {
+            if stubClient.requestedFileIDs.contains("ep5") { break }
+            await Task.yield()
+        }
+
+        // 3. While ep5 is resolving: pending file is ep5, current file is still ep1
+        XCTAssertEqual(coordinator.pendingFile?.fileId, "ep5")
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertNil(coordinator.ksPlayerURL)
+        XCTAssertEqual(stubClient.requestedFileIDs, ["ep1", "ep5"])
+        await diagnostics.waitForPendingOperations()
+        XCTAssertTrue(diagnostics.records.contains { $0.event == .episodeSelectionRequested })
+        XCTAssertFalse(diagnostics.records.contains { $0.event == .started })
+
+        // 4. Outdated ep1 response resolves after ep5 was already requested
+        stubClient.resumeContinuation(for: "ep1", with: .success(ep1Resource))
+        _ = await ep1StartTask.result
+
+        // Stale ep1 must NOT overwrite pending switch or current identity or KS URL
+        XCTAssertNil(coordinator.ksPlayerURL)
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertEqual(coordinator.pendingFile?.fileId, "ep5")
+
+        // 5. Ep5 network finishes and playback commits
+        stubClient.resumeContinuation(for: "ep5", with: .success(ep5Resource))
+        _ = await switchTask.value
+
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep5")
+        XCTAssertEqual(coordinator.ksPlayerURL, ep5Resource.url)
+        XCTAssertNil(coordinator.pendingFile)
+        XCTAssertFalse(coordinator.isCurrentPlaybackStarted)
+        XCTAssertTrue(coordinator.isPlaybackTransitionActive)
+        await diagnostics.waitForPendingOperations()
+        let selection = try XCTUnwrap(diagnostics.records.first { $0.event == .episodeSelectionRequested })
+        XCTAssertEqual(selection.metadata["episodeOrdinal"], .int(1))
+        XCTAssertEqual(selection.metadata["episodeNumber"], .int(5))
+        XCTAssertFalse(diagnostics.records.contains { $0.event == .started })
+
+        coordinator.ksCoordinator.onPlay?(0, 100)
+        await diagnostics.waitForPendingOperations()
+        XCTAssertTrue(coordinator.isCurrentPlaybackStarted)
+        XCTAssertFalse(coordinator.isPlaybackTransitionActive)
+        let started = try XCTUnwrap(diagnostics.records.first { $0.event == .started })
+        XCTAssertEqual(started.correlationID, selection.correlationID)
+        XCTAssertEqual(started.metadata["episodeOrdinal"], .int(1))
+    }
+
+    func testMatchingPlaybackFailureClearsPendingWithoutChangingCommittedFile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quark-coordinator-failure-\(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
+        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
+        let ep1 = CloudFile(fileId: "ep1", parentId: "show", name: "Show.S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep5 = CloudFile(fileId: "ep5", parentId: "show", name: "Show.S01E05.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let stubClient = EpisodeSwitchStubClient()
+        let coordinator = PlaybackCoordinator(client: stubClient, accountID: "account-1", file: ep1, queue: [ep1, ep5], history: history, diagnostics: diagnostics)
+
+        let task = coordinator.playFile(ep5, selectionOrdinal: 1, episodeNumber: 5)
+        for _ in 0..<20 {
+            if stubClient.requestedFileIDs.contains("ep5") { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(coordinator.pendingFile?.fileId, "ep5")
+        stubClient.resumeContinuation(for: "ep5", with: .failure(QuarkError.mockOnly))
+        _ = await task.value
+
+        XCTAssertNil(coordinator.pendingFile)
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertFalse(coordinator.isCurrentPlaybackStarted)
+        XCTAssertFalse(coordinator.isPlaybackTransitionActive)
+    }
+
+    func testRetryFailureClearsTransitionAfterSecondTimeout() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quark-coordinator-retry-(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
+        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
+        let ep1 = CloudFile(fileId: "ep1", parentId: "show", name: "Show.S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep5 = CloudFile(fileId: "ep5", parentId: "show", name: "Show.S01E05.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let stubClient = EpisodeSwitchStubClient()
+        stubClient.scriptedResults["ep5"] = [
+            .failure(URLError(.timedOut)),
+            .failure(URLError(.timedOut))
+        ]
+        let coordinator = PlaybackCoordinator(client: stubClient, accountID: "account-1", file: ep1, queue: [ep1, ep5], history: history, diagnostics: diagnostics)
+
+        let task = coordinator.playFile(ep5, selectionOrdinal: 1, episodeNumber: 5)
+        _ = await task.value
+        XCTAssertTrue(coordinator.isPlaybackTransitionActive)
+
+        for _ in 0..<80 {
+            if !coordinator.isPlaybackTransitionActive { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertEqual(stubClient.requestedFileIDs, ["ep5", "ep5"])
+        XCTAssertNil(coordinator.pendingFile)
+        XCTAssertFalse(coordinator.isPlaybackTransitionActive)
+        XCTAssertFalse(coordinator.isCurrentPlaybackStarted)
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertNotNil(coordinator.message)
     }
 
     func testSyncPolicyLeavesUnparsedSeriesInManualConfirmation() {
@@ -477,5 +747,46 @@ final class CodexUpdateTests: XCTestCase {
         XCTAssertTrue(appSupport?.path.contains("Application Support/QuarkTheater") ?? false)
         XCTAssertEqual(StoragePaths.mediaCatalogDatabaseURL()?.lastPathComponent, "media-catalog.sqlite")
         XCTAssertEqual(StoragePaths.watchHistoryDatabaseURL()?.lastPathComponent, "watch-history.sqlite")
+    }
+}
+
+@MainActor
+private final class EpisodeSwitchStubClient: QuarkClient {
+    var requestedFileIDs: [String] = []
+    var resources: [String: PlaybackResource] = [:]
+    var scriptedResults: [String: [Result<PlaybackResource, Error>]] = [:]
+    var pendingContinuations: [String: CheckedContinuation<PlaybackResource, Error>] = [:]
+
+    func restoreSession() async throws -> Account? { nil }
+    func beginQRCodeLogin() async throws -> QRLoginChallenge { throw QuarkError.mockOnly }
+    func pollQRCodeLogin(_ challenge: QRLoginChallenge) async throws -> QRLoginState { throw QuarkError.mockOnly }
+    func cancelQRCodeLogin() {}
+    func listFiles(parentID: String, page: Int, pageSize: Int) async throws -> CloudFilePage {
+        CloudFilePage(files: [], page: 1, pageSize: 20, total: 0)
+    }
+    func searchFiles(query: String, page: Int, pageSize: Int) async throws -> CloudFilePage {
+        CloudFilePage(files: [], page: 1, pageSize: 20, total: 0)
+    }
+    func logout() async throws {}
+
+    func playbackResource(fileID: String, correlationID: DiagnosticCorrelationID?) async throws -> PlaybackResource {
+        requestedFileIDs.append(fileID)
+        if var results = scriptedResults[fileID], !results.isEmpty {
+            let result = results.removeFirst()
+            scriptedResults[fileID] = results
+            return try result.get()
+        }
+        if let res = resources[fileID] {
+            return res
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingContinuations[fileID] = continuation
+        }
+    }
+
+    func resumeContinuation(for fileID: String, with result: Result<PlaybackResource, Error>) {
+        if let cont = pendingContinuations.removeValue(forKey: fileID) {
+            cont.resume(with: result)
+        }
     }
 }

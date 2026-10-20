@@ -18,6 +18,7 @@ struct PlayerInputState: Equatable {
     var currentPlaybackTime: Double
     var duration: Double
     var episodeFileIDs: [String] = []
+    var currentEpisodeFileID: String? = nil
     var subtitleTrackIDs: [String] = []
     var audioTrackIDs: [String] = []
 }
@@ -44,7 +45,8 @@ enum PlayerInputReducer {
                     canPlayNext: state.canPlayNext,
                     episodeFileIDs: state.episodeFileIDs,
                     subtitleTrackIDs: state.subtitleTrackIDs,
-                    audioTrackIDs: state.audioTrackIDs
+                    audioTrackIDs: state.audioTrackIDs,
+                    currentEpisodeFileID: state.currentEpisodeFileID
                 ))
             } else {
                 return .none
@@ -52,11 +54,11 @@ enum PlayerInputReducer {
 
         case .up:
             if state.isDrawerOpen {
-                if isTabLevel(state.focusedTarget) {
+                if isContentLevel(state.focusedTarget) {
+                    return .focusTarget(.drawerTab(state.selectedDrawerTab))
+                } else {
                     // Up arrow does not close drawer; only back/menu key closes drawer
                     return .none
-                } else {
-                    return .focusTarget(.drawerTab(state.selectedDrawerTab))
                 }
             } else {
                 return .none
@@ -83,13 +85,30 @@ enum PlayerInputReducer {
     }
 
     static func isTabLevel(_ target: PlayerFocusTarget?) -> Bool {
-        guard let target else { return true }
+        guard let target else { return false }
         switch target {
         case .drawerTab, .closeDrawer, .silentMarker, .drawerTrigger:
             return true
         default:
             return false
         }
+    }
+
+    static func isContentLevel(_ target: PlayerFocusTarget?) -> Bool {
+        guard let target else { return false }
+        switch target {
+        case .episode, .nextEpisode, .subtitle, .audio:
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func handleBack(state: PlayerInputState) -> PlayerRemoteAction {
+        // The Menu/Back button dismisses the drawer as a whole. Content-to-tab
+        // navigation is intentionally reserved for the Up direction so a Back
+        // press can never bubble through and dismiss the player underneath.
+        state.isDrawerOpen ? .closeDrawer : .none
     }
 
     static func navigateTab(current: PlayerFocusTarget?, direction: Int) -> PlayerRemoteAction {
@@ -162,10 +181,14 @@ enum PlayerInputReducer {
         canPlayNext: Bool,
         episodeFileIDs: [String] = [],
         subtitleTrackIDs: [String] = [],
-        audioTrackIDs: [String] = []
+        audioTrackIDs: [String] = [],
+        currentEpisodeFileID: String? = nil
     ) -> PlayerFocusTarget {
         switch tab {
         case "选集", "选集列表":
+            if let currentEpisodeFileID, episodeFileIDs.contains(currentEpisodeFileID) {
+                return .episode(currentEpisodeFileID)
+            }
             if canPlayNext { return .nextEpisode }
             if let firstID = episodeFileIDs.first { return .episode(firstID) }
             return .episode("first")

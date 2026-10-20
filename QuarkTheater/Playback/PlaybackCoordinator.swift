@@ -118,7 +118,11 @@ final class PlaybackCoordinator: ObservableObject {
     private let client: QuarkClient
     private let accountID: String
     private var currentFile: CloudFile
-    private var pendingFile: CloudFile?
+    @Published private(set) var pendingFile: CloudFile?
+    /// True only after the current generation receives KSPlayer's onPlay callback.
+    @Published private(set) var isCurrentPlaybackStarted = false
+    /// Keeps the UI in a distinct loading/switching state between request and first frame.
+    @Published private(set) var isPlaybackTransitionActive = false
     private let queue: [CloudFile]
     private let automaticallyPlayNext: Bool
     private let history: HistoryRepository
@@ -134,6 +138,7 @@ final class PlaybackCoordinator: ObservableObject {
     private var lastKSSelectedAudioIndex: Int?
     private var lastKSSelectedSubtitleIndex: Int?
     private var playbackCorrelationID: DiagnosticCorrelationID?
+    private var startedPlaybackGeneration: Int?
     private var lastPlaybackDiagnosticSampleDate: Date?
     private var lastPlaybackDiagnosticState: DiagnosticPlayerState?
     private var lastDiagnosticAudioRoute: DiagnosticAudioRoute?
@@ -159,9 +164,12 @@ final class PlaybackCoordinator: ObservableObject {
         guard !isLoading, !hasActivePlayer else { return }
         installAudioRouteObserver()
         playbackCorrelationID = diagnostics.makeCorrelationID()
+        startedPlaybackGeneration = nil
         isLoading = true
         generation += 1
         let requestGeneration = generation
+        isCurrentPlaybackStarted = false
+        isPlaybackTransitionActive = true
         defer {
             // A later episode selection owns the loading indicator.
             if requestGeneration == generation { isLoading = false }
@@ -170,7 +178,16 @@ final class PlaybackCoordinator: ObservableObject {
             restoredPosition = try history.history(accountID: accountID, fileID: currentFile.fileId)?.positionSeconds ?? 0
             try await resolveAndPlay(file: currentFile, at: restoredPosition, requestGeneration: requestGeneration)
         } catch is CancellationError {
+            if requestGeneration == generation {
+                pendingFile = nil
+                isPlaybackTransitionActive = false
+                isCurrentPlaybackStarted = false
+            }
         } catch {
+            guard requestGeneration == generation else { return }
+            pendingFile = nil
+            isPlaybackTransitionActive = false
+            isCurrentPlaybackStarted = false
             report(error)
         }
     }
@@ -188,6 +205,8 @@ final class PlaybackCoordinator: ObservableObject {
         ksPlayerURL = nil
         ksPlayerOptions = nil
         isPlaying = false
+        isCurrentPlaybackStarted = false
+        isPlaybackTransitionActive = false
     }
 
     var canPlayNext: Bool {
@@ -196,12 +215,22 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     func playNext() {
-        guard let currentIndex = queue.firstIndex(where: { $0.fileId == currentFile.fileId }),
-              currentIndex + 1 < queue.count else { return }
-        playFile(queue[currentIndex + 1])
+        playNext(manualSelection: false)
     }
 
-    func playFile(_ file: CloudFile) {
+    func playNext(manualSelection: Bool) {
+        guard let currentIndex = queue.firstIndex(where: { $0.fileId == currentFile.fileId }),
+              currentIndex + 1 < queue.count else { return }
+        let nextIndex = currentIndex + 1
+        playFile(queue[nextIndex], selectionOrdinal: manualSelection ? nextIndex : nil)
+    }
+
+    @discardableResult
+    func playFile(
+        _ file: CloudFile,
+        selectionOrdinal: Int? = nil,
+        episodeNumber: Int? = nil
+    ) -> Task<Void, Never> {
         saveProgress()
         let isNewFile = Self.isNewPlaybackFile(targetFileID: file.fileId,
                                                currentFileID: currentFile.fileId,
@@ -217,6 +246,8 @@ final class PlaybackCoordinator: ObservableObject {
             stopPlaybackHeartbeat()
         }
         pendingFile = file
+        isCurrentPlaybackStarted = false
+        isPlaybackTransitionActive = true
         restoredPosition = (try? history.history(accountID: accountID, fileID: file.fileId)?.positionSeconds) ?? 0
         message = nil
         retriesUsed = 0
@@ -226,14 +257,37 @@ final class PlaybackCoordinator: ObservableObject {
         generation += 1
         let requestGeneration = generation
         playbackCorrelationID = diagnostics.makeCorrelationID()
-        Task {
+        startedPlaybackGeneration = nil
+        if let selectionOrdinal {
+            var metadata: [DiagnosticMetadata] = [.episodeOrdinal(selectionOrdinal)]
+            if let episodeNumber { metadata.append(.episodeNumber(episodeNumber)) }
+            diagnostics.record(
+                category: .playback,
+                level: .info,
+                event: .episodeSelectionRequested,
+                correlationID: playbackCorrelationID,
+                metadata: metadata
+            )
+        }
+        return Task {
             isLoading = true
             defer {
                 if self.generation == requestGeneration { self.isLoading = false }
             }
             do { try await resolveAndPlay(file: file, at: restoredPosition, requestGeneration: requestGeneration) }
-            catch is CancellationError { }
-            catch { report(error) }
+            catch is CancellationError {
+                if self.generation == requestGeneration {
+                    self.pendingFile = nil
+                    self.isPlaybackTransitionActive = false
+                }
+            }
+            catch {
+                guard self.generation == requestGeneration else { return }
+                self.pendingFile = nil
+                self.isPlaybackTransitionActive = false
+                self.isCurrentPlaybackStarted = false
+                report(error)
+            }
         }
     }
 
@@ -388,7 +442,18 @@ final class PlaybackCoordinator: ObservableObject {
                     }
                     try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
                     guard !Task.isCancelled else { return }
-                    try? await self?.resolveAndPlay(file: requestedFile, at: position, requestGeneration: retryGen)
+                    do {
+                        guard let self else { return }
+                        try await self.resolveAndPlay(file: requestedFile, at: position, requestGeneration: retryGen)
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        guard let self, self.generation == retryGen else { return }
+                        self.pendingFile = nil
+                        self.isPlaybackTransitionActive = false
+                        self.isCurrentPlaybackStarted = false
+                        self.report(error)
+                    }
                 }
                 return
             }
@@ -449,6 +514,7 @@ final class PlaybackCoordinator: ObservableObject {
         ksCoordinator.subtitleModel.url = Self.subtitleResourceURL(for: resource.url)
         if let playerLayer = ksCoordinator.playerLayer {
             playerLayer.set(url: resource.url, options: options)
+            playerLayer.play()
         }
         self.ksAudioOptions = []
         self.ksSubtitleOptions = []
@@ -467,6 +533,23 @@ final class PlaybackCoordinator: ObservableObject {
                 self.ksCoordinator.seek(time: position)
             }
             self.isPlaying = true
+            self.isCurrentPlaybackStarted = true
+            self.isPlaybackTransitionActive = false
+            guard self.startedPlaybackGeneration != requestGeneration else { return }
+            self.startedPlaybackGeneration = requestGeneration
+            var startedMetadata: [DiagnosticMetadata] = [
+                .endpoint(.filePlay), .playerEngine(.unknown)
+            ]
+            if let ordinal = self.queue.firstIndex(where: { $0.fileId == requestedFile.fileId }) {
+                startedMetadata.append(.episodeOrdinal(ordinal))
+            }
+            self.diagnostics.record(
+                category: .playback,
+                level: .info,
+                event: .started,
+                correlationID: self.playbackCorrelationID,
+                metadata: startedMetadata
+            )
         }
         ksCoordinator.onStateChanged = { [weak self] _, state in
             guard let self else { return }
@@ -513,9 +596,6 @@ final class PlaybackCoordinator: ObservableObject {
         // therefore needs an explicit play() after set(url:options:) or it
         // can remain initialized with a frozen last frame.
         ksCoordinator.playerLayer?.play()
-        diagnostics.record(category: .playback, level: .info, event: .started,
-                           correlationID: playbackCorrelationID,
-                           metadata: [.endpoint(.filePlay), .playerEngine(.unknown)])
     }
 
     private var safePlaybackTime: Double {
@@ -705,6 +785,9 @@ final class PlaybackCoordinator: ObservableObject {
                                        scheduledGeneration: retryScheduledGeneration,
                                        retryTaskActive: retryTask != nil && !(retryTask?.isCancelled ?? true)) else { return }
         guard let delay = retryPolicy.delay(for: error, retriesUsed: retriesUsed) else {
+            pendingFile = nil
+            isPlaybackTransitionActive = false
+            isCurrentPlaybackStarted = false
             report(error)
             return
         }
@@ -728,7 +811,10 @@ final class PlaybackCoordinator: ObservableObject {
                                               at: self.retryPosition, requestGeneration: retryGeneration)
             } catch is CancellationError { return }
             catch {
-                guard let self else { return }
+                guard let self, self.generation == retryGeneration else { return }
+                self.pendingFile = nil
+                self.isPlaybackTransitionActive = false
+                self.isCurrentPlaybackStarted = false
                 self.report(error)
             }
         }
@@ -753,8 +839,20 @@ final class PlaybackCoordinator: ObservableObject {
                                      requestGeneration: requestGeneration)
             message = nil
         }
-        catch is CancellationError { return }
-        catch { report(error) }
+        catch is CancellationError {
+            if requestGeneration == generation {
+                pendingFile = nil
+                isPlaybackTransitionActive = false
+                isCurrentPlaybackStarted = false
+            }
+        }
+        catch {
+            guard requestGeneration == generation else { return }
+            pendingFile = nil
+            isPlaybackTransitionActive = false
+            isCurrentPlaybackStarted = false
+            report(error)
+        }
     }
 
     private var retryPosition: Double {

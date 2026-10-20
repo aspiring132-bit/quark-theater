@@ -32,6 +32,35 @@ enum RootFocusReducer {
     static func dockTarget(for tab: RootTab) -> RootTab { tab }
 }
 
+enum FolderBindingBackdropStyle {
+    static let blurRadius: CGFloat = 24
+    static let dimmingOpacity: Double = 0.72
+
+    static func blur(isPresented: Bool) -> CGFloat {
+        isPresented ? blurRadius : 0
+    }
+
+    static func dimming(isPresented: Bool) -> Double {
+        isPresented ? dimmingOpacity : 0
+    }
+}
+
+enum DrawerButtonFocusStyle {
+    static let focusedScale: CGFloat = 1.06
+    static let defaultScale: CGFloat = 1.0
+
+    static func scale(isFocused: Bool) -> CGFloat {
+        isFocused ? focusedScale : defaultScale
+    }
+
+    /// tvOS custom-highlighted cards must use .plain button style rather than
+    /// .borderless to avoid system icon-only enlargement or split focus rings.
+    static var prefersPlainButtonStyle: Bool {
+        true
+    }
+}
+
+
 enum FocusDiagnostics {
     static let historyTarget: DiagnosticFocusTarget = .historyRow
     static let tmdbTarget: DiagnosticFocusTarget = .tmdbResult

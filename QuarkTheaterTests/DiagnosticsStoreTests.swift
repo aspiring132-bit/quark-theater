@@ -62,6 +62,21 @@ final class DiagnosticsStoreTests: XCTestCase {
         XCTAssertNotEqual(firstID.uuidString, "account-123")
     }
 
+    func testBackDispositionAndEpisodeCorrelationMetadataAreClosedAndBounded() {
+        XCTAssertEqual(DiagnosticEvent(rawValue: "navigation.remote_back"), .remoteBack)
+        XCTAssertEqual(
+            DiagnosticEvent(rawValue: "playback.episode_selection_requested"),
+            .episodeSelectionRequested
+        )
+        let sanitized = DiagnosticMetadata.sanitizedForTesting([
+            .backDisposition(.closedDrawer),
+            .episodeNumber(10),
+            .episodeNumber(-1)
+        ])
+        XCTAssertEqual(sanitized["backDisposition"], .string("closed_drawer"))
+        XCTAssertEqual(sanitized["episodeNumber"], .int(10))
+    }
+
     func testTypedMetadataRejectsInvalidRangesAndPersistsOnlyClosedStringEnums() async throws {
         let (store, root) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
