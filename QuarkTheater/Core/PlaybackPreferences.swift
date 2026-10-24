@@ -28,8 +28,4 @@ enum PlaybackPreferences {
         set { UserDefaults.standard.set(newValue, forKey: autoPlayNextKey) }
     }
 
-    /// Primary unified engine: KSPlayer
-    static var isKSPlayerPreferred: Bool {
-        true
-    }
 }

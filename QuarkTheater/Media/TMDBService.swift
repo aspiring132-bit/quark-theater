@@ -91,6 +91,26 @@ struct TMDBSeasonDetails: Decodable, Equatable {
         for episode in episodes { map[episode.episodeNumber] = episode.stillPath }
         return map
     }
+
+    var episodeNameByEpisode: [Int: String] {
+        var map: [Int: String] = [:]
+        for episode in episodes {
+            if let name = episode.name, !name.isEmpty {
+                map[episode.episodeNumber] = name
+            }
+        }
+        return map
+    }
+}
+
+struct TMDBExternalIDs: Decodable, Equatable {
+    let id: Int
+    let imdbId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case imdbId = "imdb_id"
+    }
 }
 
 enum TMDBError: Error, LocalizedError {
@@ -273,6 +293,39 @@ struct TMDBService {
             await recordRequestFailure(correlationID: correlationID, startedAt: startedAt, stage: .seasonDetails, reason: diagnosticReason(for: error))
             throw error
         }
+    }
+
+    /// Fetch external IDs for a TV series to discover its IMDb ID (for SkipDB lookup).
+    func seriesExternalIDs(
+        seriesID: Int,
+        apiReadToken: String?
+    ) async throws -> TMDBExternalIDs {
+        let token = (apiReadToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveKey = token.isEmpty ? Self.builtInAPIKey : token
+
+        guard var components = URLComponents(string: "https://api.themoviedb.org/3/tv/\(seriesID)/external_ids") else {
+            throw TMDBError.badResponse
+        }
+        var queryItems: [URLQueryItem] = []
+        var requestHeaders: [String: String] = ["Accept": "application/json"]
+        if effectiveKey.hasPrefix("eyJ") {
+            requestHeaders["Authorization"] = "Bearer \(effectiveKey)"
+        } else {
+            queryItems.append(URLQueryItem(name: "api_key", value: effectiveKey))
+        }
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        guard let url = components.url else { throw TMDBError.badResponse }
+        var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 10)
+        requestHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw TMDBError.badResponse
+        }
+        guard let externalIDs = try? JSONDecoder().decode(TMDBExternalIDs.self, from: data) else {
+            throw TMDBError.badResponse
+        }
+        return externalIDs
     }
 
     private func performSearch(title: String, type: String, key: String, language: String, correlationID: DiagnosticCorrelationID?) async throws -> [TMDBSearchResult] {

@@ -562,7 +562,7 @@ private struct SettingsScreen: View {
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("THEATER · 设置").font(.largeTitle.bold())
-                        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.2"
+                        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.5"
                         Text("版本：V\(appVersion.replacingOccurrences(of: ".", with: "-")) · tvOS 原生私人影院")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }

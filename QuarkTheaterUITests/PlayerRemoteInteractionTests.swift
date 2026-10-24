@@ -125,16 +125,44 @@ final class PlayerRemoteInteractionTests: XCTestCase {
             waitUntil(5) { self.app.buttons["player.episodeCard.0"].hasFocus },
             "Opening the drawer must focus the currently playing episode card"
         )
+        let card0PlayingBadge = self.app.buttons["player.episodeCard.0"].descendants(matching: .any)["player.badge.playing"]
+        let card1PlayingBadge = self.app.buttons["player.episodeCard.1"].descendants(matching: .any)["player.badge.playing"]
+        XCTAssertTrue(
+            card0PlayingBadge.exists,
+            "Episode 0 must have the playing badge after opening the drawer"
+        )
+        XCTAssertFalse(
+            card1PlayingBadge.exists,
+            "Episode 1 must not have the playing badge"
+        )
 
         XCUIRemote.shared.press(.right)
         XCTAssertTrue(
             waitUntil(5) { self.app.buttons["player.episodeCard.1"].hasFocus },
             "One right press must move focus exactly one episode"
         )
+        XCTAssertFalse(
+            self.app.buttons["player.episodeCard.0"].hasFocus,
+            "Episode 0 must lose focus when moving to episode 1"
+        )
+        // Playing marker badge remains on card 0 while card 1 has focus
+        XCTAssertTrue(
+            card0PlayingBadge.exists,
+            "Playing badge must remain on currently active episode card even when focused card changes"
+        )
+        XCTAssertFalse(
+            card1PlayingBadge.exists,
+            "Focused non-playing episode card must not display the playing badge"
+        )
+
         XCUIRemote.shared.press(.left)
         XCTAssertTrue(
             waitUntil(5) { self.app.buttons["player.episodeCard.0"].hasFocus },
             "One left press must move focus exactly one episode back"
+        )
+        XCTAssertFalse(
+            self.app.buttons["player.episodeCard.1"].hasFocus,
+            "Episode 1 must lose focus when moving back to episode 0"
         )
         XCUIRemote.shared.press(.up)
         XCTAssertTrue(
@@ -148,6 +176,26 @@ final class PlayerRemoteInteractionTests: XCTestCase {
         XCTAssertEqual(
             currentTime() ?? -1, t0, accuracy: frameTolerance,
             "Horizontal drawer navigation must leave playback time untouched (t0=\(t0), now=\(currentTime() ?? -1))"
+        )
+    }
+
+    func testFocusedEpisodeCardFitsVerticallyInsideDrawerScrollRegion() throws {
+        launchPlayer(seekInterval: 15)
+        waitForDurationLoaded()
+        XCUIRemote.shared.press(.down)
+
+        let scrollRegion = app.scrollViews["player.episodeScroll"]
+        let firstEpisode = app.buttons["player.episodeCard.0"]
+        XCTAssertTrue(scrollRegion.waitForExistence(timeout: 5), "Episode scroll region is missing")
+        XCTAssertTrue(waitUntil(5) { firstEpisode.hasFocus }, "First episode card did not receive focus")
+
+        XCTAssertGreaterThanOrEqual(
+            firstEpisode.frame.minY, scrollRegion.frame.minY,
+            "Focused episode card must not be clipped at the top of the drawer"
+        )
+        XCTAssertLessThanOrEqual(
+            firstEpisode.frame.maxY, scrollRegion.frame.maxY,
+            "Focused episode card must not be clipped at the bottom of the drawer"
         )
     }
 

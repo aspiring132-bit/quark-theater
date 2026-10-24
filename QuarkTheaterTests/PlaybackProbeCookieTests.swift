@@ -45,6 +45,47 @@ final class PlaybackProbeCookieTests: XCTestCase {
         XCTAssertEqual(DiagnosticEvent.playbackSeek.rawValue, "playback.seek")
         XCTAssertEqual(DiagnosticEvent.audioSnapshot.rawValue, "audio.snapshot")
         XCTAssertEqual(DiagnosticEvent.audioError.rawValue, "audio.error")
+        XCTAssertEqual(DiagnosticEvent.audioInterruptionBegan.rawValue, "audio.interruption_began")
+        XCTAssertEqual(DiagnosticEvent.audioInterruptionEnded.rawValue, "audio.interruption_ended")
+        XCTAssertEqual(DiagnosticEvent.audioMediaServicesLost.rawValue, "audio.media_services_lost")
+        XCTAssertEqual(DiagnosticEvent.audioMediaServicesReset.rawValue, "audio.media_services_reset")
+    }
+
+    func testAudioDiagnosticMetadataIsAllowListedAndSanitized() {
+        let metadata: [DiagnosticMetadata] = [
+            .audioOutputChannels(2),
+            .audioInterruptionShouldResume(false), .audioReasonCode(6),
+            .audioVolume(0.75), .audioMuted(false), .audioPlaybackRate(1), .audioPlaybackVolume(1)
+        ]
+        let sanitized = DiagnosticMetadata.sanitizedForTesting(metadata)
+        XCTAssertEqual(sanitized["audioOutputChannels"], .int(2))
+        XCTAssertEqual(sanitized["audioInterruptionShouldResume"], .bool(false))
+        XCTAssertEqual(sanitized["audioReasonCode"], .int(6))
+        XCTAssertEqual(sanitized["audioVolume"], .double(0.75))
+        XCTAssertEqual(sanitized["audioMuted"], .bool(false))
+        XCTAssertFalse(sanitized.keys.contains { $0.lowercased().contains("url") })
+    }
+
+    func testAudioSessionCategoryAndModeAreAllowListed() {
+        let sanitized = DiagnosticMetadata.sanitizedForTesting([
+            .audioSessionCategory(.playback), .audioSessionMode(.moviePlayback)
+        ])
+        XCTAssertEqual(sanitized["audioSessionCategory"], .string("playback"))
+        XCTAssertEqual(sanitized["audioSessionMode"], .string("moviePlayback"))
+    }
+
+    func testSeekHUDHidesOnlyAfterQuietPeriod() {
+        let interaction = Date(timeIntervalSince1970: 100)
+        XCTAssertFalse(PlayerSeekHUDPolicy.shouldHide(now: interaction.addingTimeInterval(2.9), lastInteraction: interaction))
+        XCTAssertTrue(PlayerSeekHUDPolicy.shouldHide(now: interaction.addingTimeInterval(3), lastInteraction: interaction))
+        XCTAssertFalse(PlayerSeekHUDPolicy.shouldHide(now: interaction.addingTimeInterval(10), lastInteraction: nil))
+    }
+
+    func testRepeatedRemoteSeekUsesBoundedAcceleration() {
+        XCTAssertEqual(PlayerSeekRepeatPolicy.interval(configured: 10, repeatCount: 0), 10)
+        XCTAssertEqual(PlayerSeekRepeatPolicy.interval(configured: 10, repeatCount: 1), 20)
+        XCTAssertEqual(PlayerSeekRepeatPolicy.interval(configured: 15, repeatCount: 2), 45)
+        XCTAssertEqual(PlayerSeekRepeatPolicy.interval(configured: 15, repeatCount: 9), 60)
     }
 
     @MainActor
@@ -85,13 +126,7 @@ final class PlaybackProbeCookieTests: XCTestCase {
     }
 
     @MainActor
-    func testKSPlayerFinishOnlyRetriesWhenCallbackCarriesError() {
-        XCTAssertTrue(PlaybackCoordinator.shouldTreatKSFinishAsFailure(NSError(domain: "test", code: 1)))
-        XCTAssertFalse(PlaybackCoordinator.shouldTreatKSFinishAsFailure(nil))
-    }
-
-    @MainActor
-    func testKSPlayerCookieHeaderIsProvidedOnlyThroughSetCookie() {
+    func testCookieHeaderIsExcludedFromVLCResourceOptions() {
         let headers = ["Cookie": "a=b", "User-Agent": "fixture"]
         let filtered = PlaybackCoordinator.headersExcludingCookie(headers)
         XCTAssertNil(filtered["Cookie"])
@@ -100,11 +135,11 @@ final class PlaybackProbeCookieTests: XCTestCase {
 
     func testPlaybackDiagnosticsExposeEngineAndAVSyncWithoutSensitiveIdentity() {
         let metadata: [DiagnosticMetadata] = [
-            .playerEngine(.ksAVPlayer), .avSyncDeltaMilliseconds(-42), .droppedFrames(3),
+            .playerEngine(.vlcPlayer), .avSyncDeltaMilliseconds(-42), .droppedFrames(3),
             .focusOrdinal(2), .episodeOrdinal(4)
         ]
         let sanitized = DiagnosticMetadata.sanitizedForTesting(metadata)
-        XCTAssertEqual(sanitized["playerEngine"], .string("ks_av_player"))
+        XCTAssertEqual(sanitized["playerEngine"], .string("vlc_player"))
         XCTAssertEqual(sanitized["avSyncDeltaMs"], .double(-42))
         XCTAssertEqual(sanitized["droppedFrames"], .int(3))
         XCTAssertEqual(sanitized["focusOrdinal"], .int(2))
@@ -153,23 +188,6 @@ final class PlaybackProbeCookieTests: XCTestCase {
     func testPlaybackSessionTransitionResetsHeartbeatOnlyForMountedPlayer() {
         XCTAssertTrue(PlaybackCoordinator.shouldResetPlaybackHeartbeatForSessionTransition(hasActivePlayer: true))
         XCTAssertFalse(PlaybackCoordinator.shouldResetPlaybackHeartbeatForSessionTransition(hasActivePlayer: false))
-    }
-
-    @MainActor
-    func testKSPlayerTrackSnapshotOnlyChangesWhenTracksOrSelectionChanges() {
-        XCTAssertTrue(PlaybackCoordinator.ksTrackSnapshotChanged(previousIDs: [], currentIDs: [1], previousSelected: nil, currentSelected: nil))
-        XCTAssertFalse(PlaybackCoordinator.ksTrackSnapshotChanged(previousIDs: [1], currentIDs: [1], previousSelected: nil, currentSelected: nil))
-        XCTAssertTrue(PlaybackCoordinator.ksTrackSnapshotChanged(previousIDs: [1], currentIDs: [1], previousSelected: nil, currentSelected: 0))
-    }
-
-    @MainActor
-    func testKSSubtitleSelectionOffDoesNotFallBackToEmbeddedTrack() {
-        XCTAssertNil(PlaybackCoordinator.ksSubtitleSelectionIndex(
-            infoIDs: ["zh"], selectedID: nil, trackFallback: 0
-        ))
-        XCTAssertEqual(PlaybackCoordinator.ksSubtitleSelectionIndex(
-            infoIDs: [], selectedID: nil, trackFallback: 0
-        ), 0)
     }
 
     @MainActor

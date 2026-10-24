@@ -33,6 +33,11 @@ enum DiagnosticEvent: String, Codable, CaseIterable, Sendable {
     case audioSnapshot = "audio.snapshot"
     case audioError = "audio.error"
     case silentMarker = "audio.silent_marker"
+    case audioRouteChanged = "audio.route_changed"
+    case audioInterruptionBegan = "audio.interruption_began"
+    case audioInterruptionEnded = "audio.interruption_ended"
+    case audioMediaServicesLost = "audio.media_services_lost"
+    case audioMediaServicesReset = "audio.media_services_reset"
     case playerReadiness = "playback.player_readiness"
     case firstBufferReady = "playback.first_buffer_ready"
     case legacyMessage = "diagnostics.legacy_message"
@@ -177,9 +182,18 @@ enum DiagnosticAudioRoute: String, CaseIterable, Sendable {
     case unknown
 }
 
+enum DiagnosticAudioSessionCategory: String, CaseIterable, Sendable {
+    case ambient, soloAmbient, playback, record, playAndRecord, multiRoute, unknown
+}
+
+enum DiagnosticAudioSessionMode: String, CaseIterable, Sendable {
+    case `default`, moviePlayback, spokenAudio, measurement, videoRecording, videoChat, gameChat, voiceChat, voicePrompt, music, unknown
+}
+
 enum DiagnosticPlayerEngine: String, CaseIterable, Sendable {
     case ksAVPlayer = "ks_av_player"
     case ksMEPlayer = "ks_me_player"
+    case vlcPlayer = "vlc_player"
     case unknown
 }
 
@@ -286,6 +300,21 @@ enum DiagnosticMetadata: Hashable, Sendable {
     case videoTrackPresent(Bool)
     case videoNaturalSizeAvailable(Bool)
     case firstBufferReady(Bool)
+    case audioOutputChannels(Int)
+    case audioInterruptionShouldResume(Bool)
+    case audioReasonCode(Int)
+    case audioVolume(Double)
+    case audioMuted(Bool)
+    case audioPlaybackRate(Double)
+    case audioPlaybackVolume(Double)
+    case vlcDecodedAudioBlocks(Int)
+    case vlcPlayedAudioBuffers(Int)
+    case vlcLostAudioBuffers(Int)
+    case vlcDecodedVideoBlocks(Int)
+    case vlcDisplayedPictures(Int)
+    case vlcLostPictures(Int)
+    case audioSessionCategory(DiagnosticAudioSessionCategory)
+    case audioSessionMode(DiagnosticAudioSessionMode)
 
     fileprivate var persistedEntry: (key: String, value: DiagnosticValue)? {
         switch self {
@@ -367,6 +396,36 @@ enum DiagnosticMetadata: Hashable, Sendable {
             return ("videoNaturalSizeAvailable", .bool(value))
         case .firstBufferReady(let value):
             return ("firstBufferReady", .bool(value))
+        case .audioOutputChannels(let value) where (0...64).contains(value):
+            return ("audioOutputChannels", .int(value))
+        case .audioInterruptionShouldResume(let value):
+            return ("audioInterruptionShouldResume", .bool(value))
+        case .audioReasonCode(let value) where (0...100).contains(value):
+            return ("audioReasonCode", .int(value))
+        case .audioVolume(let value) where value.isFinite && (0...1).contains(value):
+            return ("audioVolume", .double(value))
+        case .audioMuted(let value):
+            return ("audioMuted", .bool(value))
+        case .audioPlaybackRate(let value) where value.isFinite && (-16...16).contains(value):
+            return ("audioPlaybackRate", .double(value))
+        case .audioPlaybackVolume(let value) where value.isFinite && (0...1).contains(value):
+            return ("audioPlaybackVolume", .double(value))
+        case .vlcDecodedAudioBlocks(let value) where (0...10_000_000_000).contains(value):
+            return ("vlcDecodedAudioBlocks", .int(value))
+        case .vlcPlayedAudioBuffers(let value) where (0...10_000_000_000).contains(value):
+            return ("vlcPlayedAudioBuffers", .int(value))
+        case .vlcLostAudioBuffers(let value) where (0...10_000_000_000).contains(value):
+            return ("vlcLostAudioBuffers", .int(value))
+        case .vlcDecodedVideoBlocks(let value) where (0...10_000_000_000).contains(value):
+            return ("vlcDecodedVideoBlocks", .int(value))
+        case .vlcDisplayedPictures(let value) where (0...10_000_000_000).contains(value):
+            return ("vlcDisplayedPictures", .int(value))
+        case .vlcLostPictures(let value) where (0...10_000_000_000).contains(value):
+            return ("vlcLostPictures", .int(value))
+        case .audioSessionCategory(let value):
+            return ("audioSessionCategory", .string(value.rawValue))
+        case .audioSessionMode(let value):
+            return ("audioSessionMode", .string(value.rawValue))
         default:
             return nil
         }
@@ -404,7 +463,8 @@ enum DiagnosticMetadata: Hashable, Sendable {
             return value
         case ("retryCount", .int(let number)) where (0...100).contains(number):
             return value
-        case ("fallback", .bool), ("bufferEmpty", .bool), ("likelyToKeepUp", .bool):
+        case ("fallback", .bool), ("bufferEmpty", .bool), ("likelyToKeepUp", .bool),
+             ("audioInterruptionShouldResume", .bool):
             return value
         case ("errorCode", .int(let number)) where (-1_000_000_000...1_000_000_000).contains(number):
             return value
@@ -413,6 +473,34 @@ enum DiagnosticMetadata: Hashable, Sendable {
         case ("trackCount", .int(let number)) where (0...1_000).contains(number):
             return value
         case ("audioTrack", .int(let number)) where (0...999).contains(number):
+            return value
+        case ("audioOutputChannels", .int(let number)) where (0...64).contains(number):
+            return value
+        case ("audioReasonCode", .int(let number)) where (0...100).contains(number):
+            return value
+        case ("audioVolume", .double(let number)) where number.isFinite && (0...1).contains(number):
+            return value
+        case ("audioMuted", .bool):
+            return value
+        case ("audioPlaybackRate", .double(let number)) where number.isFinite && (-16...16).contains(number):
+            return value
+        case ("audioPlaybackVolume", .double(let number)) where number.isFinite && (0...1).contains(number):
+            return value
+        case ("vlcDecodedAudioBlocks", .int(let number)) where (0...10_000_000_000).contains(number):
+            return value
+        case ("vlcPlayedAudioBuffers", .int(let number)) where (0...10_000_000_000).contains(number):
+            return value
+        case ("vlcLostAudioBuffers", .int(let number)) where (0...10_000_000_000).contains(number):
+            return value
+        case ("vlcDecodedVideoBlocks", .int(let number)) where (0...10_000_000_000).contains(number):
+            return value
+        case ("vlcDisplayedPictures", .int(let number)) where (0...10_000_000_000).contains(number):
+            return value
+        case ("vlcLostPictures", .int(let number)) where (0...10_000_000_000).contains(number):
+            return value
+        case ("audioSessionCategory", .string(let raw)) where DiagnosticAudioSessionCategory(rawValue: raw) != nil:
+            return value
+        case ("audioSessionMode", .string(let raw)) where DiagnosticAudioSessionMode(rawValue: raw) != nil:
             return value
         case ("candidateCount", .int(let number)) where (0...10_000).contains(number):
             return value

@@ -1,27 +1,19 @@
 import XCTest
-@preconcurrency import KSPlayer
 @testable import QuarkTheater
-
-final class SpyPlayerLayer: KSPlayerLayer, @unchecked Sendable {
-    nonisolated(unsafe) var stateChangedCallbackAtPlayTime: ((KSPlayerLayer, KSPlayerState) -> Void)?
-    nonisolated(unsafe) var playCallbackAtPlayTime: ((TimeInterval, TimeInterval) -> Void)?
-    nonisolated(unsafe) var playCallCount = 0
-    nonisolated(unsafe) weak var observedCoordinator: KSVideoPlayer.Coordinator?
-
-    override func play() {
-        playCallCount += 1
-        if playCallCount == 1 {
-            MainActor.assumeIsolated {
-                stateChangedCallbackAtPlayTime = observedCoordinator?.onStateChanged
-                playCallbackAtPlayTime = observedCoordinator?.onPlay
-            }
-        }
-        super.play()
-    }
-}
 
 @MainActor
 final class CodexUpdateTests: XCTestCase {
+
+    func testPlaybackURLPolicyAllowsOfflineFilesOnlyForUITestHarness() {
+        let fileURL = URL(fileURLWithPath: "/tmp/quarktheater-fixture.mp4")
+        let httpsURL = URL(string: "https://example.invalid/video.mp4")!
+        let httpURL = URL(string: "http://example.invalid/video.mp4")!
+
+        XCTAssertTrue(PlaybackCoordinator.isPlaybackURLAllowed(httpsURL, allowLocalUITestFile: false))
+        XCTAssertFalse(PlaybackCoordinator.isPlaybackURLAllowed(fileURL, allowLocalUITestFile: false))
+        XCTAssertTrue(PlaybackCoordinator.isPlaybackURLAllowed(fileURL, allowLocalUITestFile: true))
+        XCTAssertFalse(PlaybackCoordinator.isPlaybackURLAllowed(httpURL, allowLocalUITestFile: true))
+    }
 
     // MARK: - 1. MatchDecisionPolicy Tests
     func testMatchDecisionPolicyThresholds() {
@@ -469,7 +461,6 @@ final class CodexUpdateTests: XCTestCase {
         }
         XCTAssertEqual(stubClient.requestedFileIDs, ["ep1"])
         XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
-        XCTAssertNil(coordinator.ksPlayerURL)
 
         // 2. User selects episode 5 in drawer (ep5 network in flight)
         let switchTask = coordinator.playFile(ep5, selectionOrdinal: 1, episodeNumber: 5)
@@ -481,7 +472,6 @@ final class CodexUpdateTests: XCTestCase {
         // 3. While ep5 is resolving: pending file is ep5, current file is still ep1
         XCTAssertEqual(coordinator.pendingFile?.fileId, "ep5")
         XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
-        XCTAssertNil(coordinator.ksPlayerURL)
         XCTAssertEqual(stubClient.requestedFileIDs, ["ep1", "ep5"])
         await diagnostics.waitForPendingOperations()
         XCTAssertTrue(diagnostics.records.contains { $0.event == .episodeSelectionRequested })
@@ -491,8 +481,7 @@ final class CodexUpdateTests: XCTestCase {
         stubClient.resumeContinuation(for: "ep1", with: .success(ep1Resource))
         _ = await ep1StartTask.result
 
-        // Stale ep1 must NOT overwrite pending switch or current identity or KS URL
-        XCTAssertNil(coordinator.ksPlayerURL)
+        // Stale ep1 must NOT overwrite pending switch or current identity.
         XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
         XCTAssertEqual(coordinator.pendingFile?.fileId, "ep5")
 
@@ -501,7 +490,6 @@ final class CodexUpdateTests: XCTestCase {
         _ = await switchTask.value
 
         XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep5")
-        XCTAssertEqual(coordinator.ksPlayerURL, ep5Resource.url)
         XCTAssertNil(coordinator.pendingFile)
         XCTAssertFalse(coordinator.isCurrentPlaybackStarted)
         XCTAssertTrue(coordinator.isPlaybackTransitionActive)
@@ -511,71 +499,6 @@ final class CodexUpdateTests: XCTestCase {
         XCTAssertEqual(selection.metadata["episodeNumber"], .int(5))
         XCTAssertFalse(diagnostics.records.contains { $0.event == .started })
 
-        coordinator.ksCoordinator.onPlay?(0, 100)
-        await diagnostics.waitForPendingOperations()
-        XCTAssertTrue(coordinator.isCurrentPlaybackStarted)
-        XCTAssertFalse(coordinator.isPlaybackTransitionActive)
-        let started = try XCTUnwrap(diagnostics.records.first { $0.event == .started })
-        XCTAssertEqual(started.correlationID, selection.correlationID)
-        XCTAssertEqual(started.metadata["episodeOrdinal"], .int(1))
-    }
-
-    func testEpisodeReplacementRegistersCallbacksBeforePlayerLayerSetAndPlay() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("quark-coordinator-callbacks-\(UUID().uuidString)", isDirectory: true)
-        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
-        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
-
-        let ep1 = CloudFile(fileId: "ep1", parentId: "show", name: "Show.S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
-        let ep5 = CloudFile(fileId: "ep5", parentId: "show", name: "Show.S01E05.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
-        let ep5Resource = PlaybackResource(
-            fileID: "ep5",
-            url: URL(string: "https://pan.quark.cn/stream/ep5.mp4")!,
-            cookies: [],
-            requiredHTTPHeaders: [:],
-            expiresAt: nil
-        )
-
-        let stubClient = EpisodeSwitchStubClient()
-        stubClient.resources["ep5"] = ep5Resource
-        let coordinator = PlaybackCoordinator(
-            client: stubClient,
-            accountID: "account-1",
-            file: ep1,
-            queue: [ep1, ep5],
-            history: history,
-            diagnostics: diagnostics
-        )
-
-        // Mount a spy layer to simulate an already-active playback session (e.g. from ep1)
-        let dummyURL = URL(string: "https://pan.quark.cn/stream/ep1.mp4")!
-        let spyLayer = SpyPlayerLayer(url: dummyURL, options: KSOptions())
-        spyLayer.observedCoordinator = coordinator.ksCoordinator
-        coordinator.ksCoordinator.playerLayer = spyLayer
-
-        // Switch to Episode 5
-        let switchTask = coordinator.playFile(ep5, selectionOrdinal: 1, episodeNumber: 5)
-        _ = await switchTask.value
-
-        // Under root cause: callbacks were cleared and only re-registered AFTER set/play,
-        // so stateChangedCallbackAtPlayTime was nil on the first play() invocation!
-        XCTAssertNotNil(spyLayer.stateChangedCallbackAtPlayTime, "Callbacks MUST be registered before playerLayer playback is initiated so initial preparation/buffering states are captured.")
-        XCTAssertNotNil(spyLayer.playCallbackAtPlayTime, "onPlay callback MUST be registered before playerLayer playback is initiated so early playback ticks are not dropped.")
-
-        // Verify readiness diagnostics distinguishing observed audio/video facts
-        coordinator.ksCoordinator.onStateChanged?(spyLayer, .readyToPlay)
-        coordinator.ksCoordinator.onBufferChanged?(0, 0.25)
-        await diagnostics.waitForPendingOperations()
-
-        let readiness = try XCTUnwrap(diagnostics.records.first { $0.event == .playerReadiness })
-        XCTAssertEqual(readiness.metadata["switchGeneration"], .int(1))
-        XCTAssertNotNil(readiness.metadata["audioTrackPresent"])
-        XCTAssertNotNil(readiness.metadata["videoTrackPresent"])
-        XCTAssertNotNil(readiness.metadata["videoNaturalSizeAvailable"])
-
-        let firstBuffer = try XCTUnwrap(diagnostics.records.first { $0.event == .firstBufferReady })
-        XCTAssertEqual(firstBuffer.metadata["switchGeneration"], .int(1))
-        XCTAssertEqual(firstBuffer.metadata["firstBufferReady"], .bool(true))
     }
 
     func testMatchingPlaybackFailureClearsPendingWithoutChangingCommittedFile() async throws {
@@ -812,7 +735,6 @@ final class CodexUpdateTests: XCTestCase {
 
     // MARK: - 5. PlaybackPreferences
     func testPlaybackPreferencesDefaults() {
-        XCTAssertTrue(PlaybackPreferences.isKSPlayerPreferred)
         XCTAssertEqual(PlaybackPreferences.defaultSeekInterval, 10)
         XCTAssertEqual(PlaybackPreferences.allowedSeekIntervals, [10, 15])
     }
