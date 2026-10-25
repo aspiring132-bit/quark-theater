@@ -10,6 +10,7 @@ enum FileBrowserFocusTarget: Hashable {
 struct FileBrowserScreen: View {
     @StateObject private var model: FileBrowserViewModel
     @State private var showPlaybackNotice = false
+    @State private var showUnavailableHistoryAlert = false
     @State private var selectedVideo: CloudFile?
     @State private var searchText = ""
     @FocusState private var focusedTarget: FileBrowserFocusTarget?
@@ -34,9 +35,11 @@ struct FileBrowserScreen: View {
     }
 
     var body: some View {
+        let isPlayerPresented = selectedVideo != nil && history != nil
         let showEmptyState = model.files.isEmpty && !model.isLoading && model.errorMessage == nil
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
                 HStack {
                     VStack(alignment: .leading, spacing: 12) {
                         Text(model.title).font(.largeTitle.bold())
@@ -122,24 +125,40 @@ struct FileBrowserScreen: View {
         } message: {
             Text("当前文件类型不是支持的视频格式。")
         }
-        .fullScreenCover(item: $selectedVideo) { file in
-            if let history {
-                let projection = directProjection(for: file)
-                PlayerScreen(
-                    client: client,
-                    accountID: accountID,
-                    file: file,
-                    queue: projection.queue,
-                    automaticallyPlayNext: autoPlayNextEpisode,
-                    history: history,
-                    diagnostics: diagnostics,
-                    episodeMetadataByFileID: projection.metadata
-                )
-            } else {
-                Text("无法创建本地观看记录数据库。")
+        .alert("观看记录不可用", isPresented: $showUnavailableHistoryAlert) {
+            Button("好", role: .cancel) {
+                selectedVideo = nil
+            }
+        } message: {
+            Text("无法创建本地观看记录数据库，暂无法播放视频。")
+        }
+        .onChange(of: selectedVideo) { _, file in
+            if file != nil && history == nil {
+                showUnavailableHistoryAlert = true
             }
         }
+        .disabled(isPlayerPresented)
+        .accessibilityHidden(isPlayerPresented)
+
+        if let file = selectedVideo, let history {
+            let projection = directProjection(for: file)
+            PlayerScreen(
+                client: client,
+                accountID: accountID,
+                file: file,
+                queue: projection.queue,
+                automaticallyPlayNext: autoPlayNextEpisode,
+                history: history,
+                diagnostics: diagnostics,
+                episodeMetadataByFileID: projection.metadata,
+                onRequestDismiss: {
+                    selectedVideo = nil
+                }
+            )
+            .ignoresSafeArea()
+        }
     }
+}
 
     private func directProjection(for selected: CloudFile) -> (queue: [CloudFile], metadata: [String: ParsedMediaName]) {
         let videos = model.files.filter(\.isVideo)
@@ -159,7 +178,13 @@ struct FileBrowserScreen: View {
         return HStack(spacing: 14) {
             Button {
                 if file.isDirectory { Task { await model.open(file) } }
-                else if file.isVideo { selectedVideo = file }
+                else if file.isVideo {
+                    if history == nil {
+                        showUnavailableHistoryAlert = true
+                    } else {
+                        selectedVideo = file
+                    }
+                }
                 else { showPlaybackNotice = true }
             } label: {
                 HStack(spacing: 28) {

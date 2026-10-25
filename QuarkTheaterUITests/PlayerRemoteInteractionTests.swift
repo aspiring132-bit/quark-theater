@@ -31,6 +31,7 @@ final class PlayerRemoteInteractionTests: XCTestCase {
     private var stateText: XCUIElement { app.staticTexts["player.playPauseState"] }
     private var durationText: XCUIElement { app.staticTexts["player.durationText"] }
     private var episodesTab: XCUIElement { app.buttons["player.tab.选集"] }
+    private var homeMarker: XCUIElement { app.staticTexts["player.homeMarker"] }
 
     private func currentTime() -> Double? {
         guard timeText.exists, let value = Double(timeText.label) else { return nil }
@@ -231,7 +232,7 @@ final class PlayerRemoteInteractionTests: XCTestCase {
         waitForPlayState(initial)
     }
 
-    // MARK: - Closing the drawer restores a visible focus target
+    // MARK: - Closing the drawer restores a visible focus target and subsequent back dismisses player
 
     func testClosingDrawerRestoresVisibleFocusTarget() throws {
         launchPlayer(seekInterval: 15)
@@ -248,8 +249,23 @@ final class PlayerRemoteInteractionTests: XCTestCase {
             "Menu/back must close the drawer"
         )
         XCTAssertTrue(
+            self.app.buttons["player.drawerTrigger"].exists,
+            "Player must remain present after closing drawer"
+        )
+        XCTAssertTrue(
             waitUntil(5) { self.app.buttons["player.drawerTrigger"].hasFocus },
             "Closing the drawer must restore focus to the (still-mounted) drawer trigger"
+        )
+
+        // Subsequently pressing Menu separately dismisses the player overlay presentation.
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(
+            waitUntil(5) { !self.app.buttons["player.drawerTrigger"].exists && !self.timeText.exists },
+            "Player presentation controls and readout must disappear after player is dismissed"
+        )
+        XCTAssertTrue(
+            self.homeMarker.waitForExistence(timeout: 5),
+            "Underlying home marker must become visible after player presentation is dismissed"
         )
     }
 }

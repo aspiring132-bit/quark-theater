@@ -125,8 +125,10 @@ struct MediaLibraryScreen: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 36) {
+        let isPlayerPresented = playingFile != nil
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 36) {
                 // MARK: - 1. Hero Showcase Billboard (Netflix / Apple TV / 爆米花影视 巨幕展台)
                 if let active = focusedItem ?? posterItems.first {
                     heroShowcase(item: active)
@@ -214,8 +216,14 @@ struct MediaLibraryScreen: View {
                 .focusSection()
 
                 // Continue Watching Row (if any)
-                HomeContinueWatchingView(repository: history, accountID: accountID, client: client, diagnostics: diagnostics)
-                    .padding(.horizontal, 60)
+                HomeContinueWatchingView(repository: history, accountID: accountID) { file in
+                    playlistQueue = [file]
+                    playlistMetadata = [:]
+                    playingBackdropURL = nil
+                    playingSeriesTMDBId = nil
+                    playingFile = file
+                }
+                .padding(.horizontal, 60)
 
                 // Scanning Progress / Status message
                 if isScanning {
@@ -411,7 +419,10 @@ struct MediaLibraryScreen: View {
                 reloadConfirmed()
             }
         }
-        .fullScreenCover(item: $playingFile) { file in
+        .disabled(isPlayerPresented)
+        .accessibilityHidden(isPlayerPresented)
+
+        if let file = playingFile {
             PlayerScreen(
                 client: client,
                 accountID: accountID,
@@ -422,9 +433,14 @@ struct MediaLibraryScreen: View {
                 diagnostics: diagnostics,
                 backdropURL: playingBackdropURL,
                 episodeMetadataByFileID: playlistMetadata,
-                seriesTMDBId: playingSeriesTMDBId
+                seriesTMDBId: playingSeriesTMDBId,
+                onRequestDismiss: {
+                    playingFile = nil
+                }
             )
+            .ignoresSafeArea()
         }
+    }
         .sheet(item: $matchCandidate) { candidate in
             TMDBMatchScreen(
                 candidate: candidate,

@@ -171,6 +171,7 @@ struct MediaItemDetailScreen: View {
     }
 
     var body: some View {
+        let isPlayerPresented = selectedFile != nil
         ZStack {
             BrandPalette.deepCharcoal
                 .ignoresSafeArea()
@@ -330,6 +331,27 @@ struct MediaItemDetailScreen: View {
             }
             .padding(.bottom, 80)
             }
+            .disabled(isPlayerPresented)
+            .accessibilityHidden(isPlayerPresented)
+
+            if let file = selectedFile {
+                PlayerScreen(
+                    client: client,
+                    accountID: accountID,
+                    file: file,
+                    queue: Self.playbackQueue(for: file, episodes: currentSeasonEpisodes),
+                    automaticallyPlayNext: autoPlayNextEpisode,
+                    history: history,
+                    diagnostics: diagnostics,
+                    backdropURL: item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") },
+                    episodeMetadataByFileID: Dictionary(uniqueKeysWithValues: currentSeasonEpisodes.map { ($0.1.fileId, $0.2) }),
+                    seriesTMDBId: item.mediaType == .series ? item.tmdbId : nil,
+                    onRequestDismiss: {
+                        selectedFile = nil
+                    }
+                )
+                .ignoresSafeArea()
+            }
         }
         .ignoresSafeArea()
         .task {
@@ -354,20 +376,6 @@ struct MediaItemDetailScreen: View {
         }
         .onChange(of: selectedSeason) { _, season in
             focusedEpisodeID = seasonGroups[season]?.first?.1.fileId
-        }
-        .fullScreenCover(item: $selectedFile) { file in
-            PlayerScreen(
-                client: client,
-                accountID: accountID,
-                file: file,
-                queue: Self.playbackQueue(for: file, episodes: currentSeasonEpisodes),
-                automaticallyPlayNext: autoPlayNextEpisode,
-                history: history,
-                diagnostics: diagnostics,
-                backdropURL: item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") },
-                episodeMetadataByFileID: Dictionary(uniqueKeysWithValues: currentSeasonEpisodes.map { ($0.1.fileId, $0.2) }),
-                seriesTMDBId: item.mediaType == .series ? item.tmdbId : nil
-            )
         }
         .sheet(isPresented: $showRematchSheet) {
             TMDBMatchScreen(

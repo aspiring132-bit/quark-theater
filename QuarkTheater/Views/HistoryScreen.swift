@@ -13,10 +13,8 @@ enum HistoryFocusReducer {
 struct HomeContinueWatchingView: View {
     let repository: HistoryRepository
     let accountID: String
-    let client: QuarkClient
-    let diagnostics: Diagnostics
+    var onSelectFile: ((CloudFile) -> Void)? = nil
     @State private var records: [WatchHistory] = []
-    @State private var selectedFile: CloudFile?
 
     var body: some View {
         if !records.isEmpty {
@@ -34,7 +32,7 @@ struct HomeContinueWatchingView: View {
                     HStack(spacing: 20) {
                         ForEach(records.prefix(8)) { item in
                             Button {
-                                selectedFile = CloudFile(
+                                let file = CloudFile(
                                     fileId: item.fileId,
                                     parentId: "0",
                                     name: item.displayName,
@@ -43,6 +41,7 @@ struct HomeContinueWatchingView: View {
                                     modifiedAt: nil,
                                     isDirectory: false
                                 )
+                                onSelectFile?(file)
                             } label: {
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
@@ -93,10 +92,6 @@ struct HomeContinueWatchingView: View {
                 }
             }
             .task { reload() }
-            .fullScreenCover(item: $selectedFile) { file in
-                PlayerScreen(client: client, accountID: accountID, file: file,
-                             history: repository, diagnostics: diagnostics)
-            }
         }
     }
 
@@ -127,20 +122,39 @@ struct HistoryScreen: View {
     private var completed: [WatchHistory] { records.filter(\.completed) }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                HStack {
-                    Text("观看历史").font(.largeTitle.bold())
-                    Spacer()
-                    Button("清空此账号历史", role: .destructive) { showClearConfirmation = true }
-                        .focused($focusedFileID, equals: "__history_toolbar__")
-                        .disabled(records.isEmpty)
-                }
-                if let errorMessage { Text(errorMessage).foregroundStyle(.orange) }
-                section("继续观看", items: inProgress)
-                section("已看完", items: completed)
-                if records.isEmpty && errorMessage == nil { Text("还没有观看记录").foregroundStyle(.secondary) }
-            }.frame(maxWidth: 1400, alignment: .leading).padding(60)
+        let isPlayerPresented = selectedFile != nil
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    HStack {
+                        Text("观看历史").font(.largeTitle.bold())
+                        Spacer()
+                        Button("清空此账号历史", role: .destructive) { showClearConfirmation = true }
+                            .focused($focusedFileID, equals: "__history_toolbar__")
+                            .disabled(records.isEmpty)
+                    }
+                    if let errorMessage { Text(errorMessage).foregroundStyle(.orange) }
+                    section("继续观看", items: inProgress)
+                    section("已看完", items: completed)
+                    if records.isEmpty && errorMessage == nil { Text("还没有观看记录").foregroundStyle(.secondary) }
+                }.frame(maxWidth: 1400, alignment: .leading).padding(60)
+            }
+            .disabled(isPlayerPresented)
+            .accessibilityHidden(isPlayerPresented)
+
+            if let file = selectedFile {
+                PlayerScreen(
+                    client: client,
+                    accountID: accountID,
+                    file: file,
+                    history: repository,
+                    diagnostics: diagnostics,
+                    onRequestDismiss: {
+                        selectedFile = nil
+                    }
+                )
+                .ignoresSafeArea()
+            }
         }
         .task(id: accountID) { reload() }
         .onChange(of: focusedFileID) { _, target in
@@ -149,10 +163,6 @@ struct HistoryScreen: View {
             } else if target != nil {
                 diagnostics.recordFocusTransition(.historyRow)
             }
-        }
-        .fullScreenCover(item: $selectedFile) { file in
-            PlayerScreen(client: client, accountID: accountID, file: file,
-                         history: repository, diagnostics: diagnostics)
         }
         .confirmationDialog("清空当前账号的观看记录？", isPresented: $showClearConfirmation, titleVisibility: .visible) {
             Button("清空历史", role: .destructive) {

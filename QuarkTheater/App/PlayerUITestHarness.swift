@@ -171,6 +171,7 @@ final class UITestPlayerProbe: ObservableObject {
 @MainActor
 struct PlayerUITestHarness: View {
     @StateObject private var probe = UITestPlayerProbe()
+    @State private var isPlayerPresented = true
 
     private let client = UITestPlaybackClient()
     private let history: HistoryRepository
@@ -196,34 +197,48 @@ struct PlayerUITestHarness: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            PlayerScreen(
-                client: client,
-                accountID: "uitest-account",
-                file: files[0],
-                queue: files,
-                automaticallyPlayNext: false,
-                history: history,
-                diagnostics: diagnostics,
-                episodeMetadataByFileID: metadataByFileID,
-                coordinatorObserver: { coordinator in probe.attach(coordinator) }
-            )
+        ZStack {
+            Color.black.ignoresSafeArea()
+            Text("UI Test Home Scene")
+                .font(.title2.bold())
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("player.homeMarker")
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(probe.playState)
-                    .accessibilityIdentifier("player.playPauseState")
-                Text(probe.timeText)
-                    .accessibilityIdentifier("player.timeText")
-                Text(probe.durationText)
-                    .accessibilityIdentifier("player.durationText")
+            if isPlayerPresented {
+                ZStack(alignment: .topLeading) {
+                    PlayerScreen(
+                        client: client,
+                        accountID: "uitest-account",
+                        file: files[0],
+                        queue: files,
+                        automaticallyPlayNext: false,
+                        history: history,
+                        diagnostics: diagnostics,
+                        episodeMetadataByFileID: metadataByFileID,
+                        onRequestDismiss: {
+                            isPlayerPresented = false
+                        },
+                        coordinatorObserver: { coordinator in probe.attach(coordinator) }
+                    )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(probe.playState)
+                            .accessibilityIdentifier("player.playPauseState")
+                        Text(probe.timeText)
+                            .accessibilityIdentifier("player.timeText")
+                        Text(probe.durationText)
+                            .accessibilityIdentifier("player.durationText")
+                    }
+                    .font(.system(size: 16, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .padding(8)
+                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+                    .padding(.top, 28)
+                    .padding(.leading, 44)
+                    .allowsHitTesting(false)
+                }
+                .transition(.identity)
             }
-            .font(.system(size: 16, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.65))
-            .padding(8)
-            .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
-            .padding(.top, 28)
-            .padding(.leading, 44)
-            .allowsHitTesting(false)
         }
     }
 }

@@ -159,7 +159,7 @@ def generate() -> dict[Path, str]:
     app_config = configurations("app", {
         "PRODUCT_NAME": "$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER": "org.quarktheater.app.wangbin",
         "PRODUCT_MODULE_NAME": "QuarkTheater", "GENERATE_INFOPLIST_FILE": "YES",
-        "MARKETING_VERSION": "1.5", "CURRENT_PROJECT_VERSION": "2",
+        "MARKETING_VERSION": "1.6", "CURRENT_PROJECT_VERSION": "2",
         "INFOPLIST_KEY_CFBundleDisplayName": "Quark Theater",
         "INFOPLIST_KEY_LSApplicationCategoryType": "public.app-category.entertainment",
         "INFOPLIST_KEY_ITSAppUsesNonExemptEncryption": "NO",

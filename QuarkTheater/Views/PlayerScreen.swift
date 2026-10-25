@@ -9,7 +9,6 @@ struct PlayerScreen: View {
     static let hintDismissDurationSeconds: Double = 3.0
     @State private var showDrawer = false
     @State private var showHintPill = true
-    @State private var lastDrawerCloseTime: Date?
     @State private var selectedDrawerTab: DrawerTab = .episodes
     @State private var isSeeking = false
     @State private var pendingSeekTarget: Double?
@@ -18,6 +17,7 @@ struct PlayerScreen: View {
     @State private var seekState = PlayerRemoteSeekState()
     @State private var seekMultiplier = 1
     @State private var seekLastInteractionDate: Date?
+    @State private var lastDrawerCloseTime: Date?
     @State private var lastBackDate: Date?
     @State private var hintDismissTask: Task<Void, Never>?
     @State private var stillURLByFileID: [String: URL] = [:]
@@ -29,6 +29,7 @@ struct PlayerScreen: View {
     private let episodeMetadataByFileID: [String: ParsedMediaName]
     private let seriesTMDBId: Int?
     private let artworkProvider: EpisodeArtworkProvider?
+    private let onRequestDismiss: (() -> Void)?
 
     @FocusState private var focusedTarget: PlayerFocusTarget?
 
@@ -46,6 +47,7 @@ struct PlayerScreen: View {
          episodeMetadataByFileID: [String: ParsedMediaName] = [:],
          seriesTMDBId: Int? = nil,
          artworkProvider: EpisodeArtworkProvider? = nil,
+         onRequestDismiss: (() -> Void)? = nil,
          // Narrow UI-test seam: lets a harness observe the real coordinator's
          // state. Never set in production call sites.
          coordinatorObserver: ((PlaybackCoordinator) -> Void)? = nil) {
@@ -54,6 +56,7 @@ struct PlayerScreen: View {
         self.episodeMetadataByFileID = episodeMetadataByFileID
         self.seriesTMDBId = seriesTMDBId
         self.artworkProvider = artworkProvider
+        self.onRequestDismiss = onRequestDismiss
         let playbackCoordinator = PlaybackCoordinator(
             client: client,
             accountID: accountID,
@@ -119,7 +122,7 @@ struct PlayerScreen: View {
                     HStack(spacing: 20) {
                         Button("重新尝试") { coordinator.retry() }
                             .buttonStyle(.borderedProminent)
-                        Button("返回") { dismiss() }
+                        Button("返回") { requestDismiss() }
                             .buttonStyle(.bordered)
                     }
                 }
@@ -150,6 +153,9 @@ struct PlayerScreen: View {
                 .buttonStyle(DrawerTriggerButtonStyle())
                 .focusEffectDisabled(true)
                 .focused($focusedTarget, equals: .drawerTrigger)
+                .onExitCommand {
+                    handleBackCommand()
+                }
                 .accessibilityIdentifier("player.drawerTrigger")
                 // Keep the trigger focusable in the focus tree after the hint fades so
                 // it retains focus stably and prevents conditional overlay buttons from stealing focus.
@@ -206,6 +212,9 @@ struct PlayerScreen: View {
                     }
                     .buttonStyle(.plain)
                     .focused($focusedTarget, equals: .skipIntro)
+                    .onExitCommand {
+                        handleBackCommand()
+                    }
                     .accessibilityIdentifier("player.skipIntroButton")
                     .padding(.trailing, 60)
                     .padding(.bottom, 60)
@@ -228,6 +237,9 @@ struct PlayerScreen: View {
                     }
                     .buttonStyle(.plain)
                     .focused($focusedTarget, equals: .skipOutro)
+                    .onExitCommand {
+                        handleBackCommand()
+                    }
                     .accessibilityIdentifier("player.skipOutroButton")
                     .padding(.trailing, 60)
                     .padding(.bottom, 60)
@@ -281,6 +293,7 @@ struct PlayerScreen: View {
         .onExitCommand {
             handleBackCommand()
         }
+        .interactiveDismissDisabled(true)
     }
 
     private var currentInputState: PlayerInputState {
@@ -384,6 +397,7 @@ struct PlayerScreen: View {
 
     private func openDrawer() {
         hintDismissTask?.cancel()
+        selectedDrawerTab = .episodes
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             showDrawer = true
             showHintPill = false
@@ -392,9 +406,7 @@ struct PlayerScreen: View {
         // Give a brief moment for views to appear, then set focus
         let currentID = coordinator.activePlayingFileID ?? coordinator.currentPlayingFile.fileId
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            focusedTarget = selectedDrawerTab == .episodes
-                ? .episode(currentID)
-                : .drawerTab(selectedDrawerTab.rawValue)
+            focusedTarget = .episode(currentID)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             guard showDrawer, selectedDrawerTab == .episodes else { return }
@@ -458,6 +470,7 @@ struct PlayerScreen: View {
     private func closeDrawer() {
         hintDismissTask?.cancel()
         lastDrawerCloseTime = Date()
+        selectedDrawerTab = .episodes
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             showDrawer = false
             showHintPill = true
@@ -477,9 +490,9 @@ struct PlayerScreen: View {
         }
         lastBackDate = now
 
-        let drawerWasOpen = showDrawer
+        let action = PlayerInputReducer.handleBack(state: currentInputState)
         var metadata: [DiagnosticMetadata] = [
-            .backDisposition(drawerWasOpen ? .closedDrawer : .dismissedPlayer)
+            .backDisposition(action == .closeDrawer ? .closedDrawer : .dismissedPlayer)
         ]
         let playingID = coordinator.currentPlayingFile.fileId
         if let ordinal = coordinator.playlistQueue.firstIndex(where: { $0.fileId == playingID }) {
@@ -495,7 +508,8 @@ struct PlayerScreen: View {
             correlationID: coordinator.playbackCorrelation,
             metadata: metadata
         )
-        if drawerWasOpen {
+        print("[PlayerScreen] handleBackCommand: action=\(action), isDrawerOpen=\(currentInputState.isDrawerOpen), playingID=\(playingID)")
+        if action == .closeDrawer {
             closeDrawer()
             return
         }
@@ -503,7 +517,15 @@ struct PlayerScreen: View {
             // Absorb back command during or right after drawer close animation to avoid accidental dismissal
             return
         }
-        dismiss()
+        requestDismiss()
+    }
+
+    private func requestDismiss() {
+        if let onRequestDismiss {
+            onRequestDismiss()
+        } else {
+            dismiss()
+        }
     }
 
     private func restartHintDismissTimer() {
@@ -603,11 +625,6 @@ struct PlayerScreen: View {
         .padding(.horizontal, 40)
         .padding(.bottom, 24)
         .focusSection()
-        .onExitCommand {
-            // Handle Back at the focused drawer's own scope so it closes this
-            // panel instead of bubbling out to the player presentation.
-            handleBackCommand()
-        }
     }
 
     // MARK: - Tab Button (Horizontal Pill with Focus Highlight)
@@ -658,6 +675,9 @@ struct PlayerScreen: View {
         }
         .buttonStyle(.plain)
         .focused($focusedTarget, equals: .drawerTab(tab.rawValue))
+        .onExitCommand {
+            handleBackCommand()
+        }
         .accessibilityIdentifier("player.tab.\(tab.rawValue)")
     }
 
@@ -692,17 +712,24 @@ struct PlayerScreen: View {
                             isCurrent: isCurrent,
                             isPending: isPending,
                             // Fallback chain: episode still → series backdrop → placeholder.
-                            artworkURL: stillURLByFileID[file.fileId] ?? backdropURL
-                        ) {
-                            coordinator.playFile(
-                                file,
-                                selectionOrdinal: index,
-                                episodeNumber: episodeMetadataByFileID[file.fileId]?.episodeNumber
-                            )
-                            closeDrawer()
-                        }
+                            artworkURL: stillURLByFileID[file.fileId] ?? backdropURL,
+                            action: {
+                                coordinator.playFile(
+                                    file,
+                                    selectionOrdinal: index,
+                                    episodeNumber: episodeMetadataByFileID[file.fileId]?.episodeNumber
+                                )
+                                closeDrawer()
+                            },
+                            onExit: {
+                                handleBackCommand()
+                            }
+                        )
                         .id(PlayerFocusTarget.episode(file.fileId))
                         .focused($focusedTarget, equals: .episode(file.fileId))
+                        .onExitCommand {
+                            handleBackCommand()
+                        }
                         // Index-based identifier: never exposes real cloud file IDs.
                         .accessibilityIdentifier("player.episodeCard.\(index)")
                     }
@@ -775,6 +802,9 @@ struct PlayerScreen: View {
         .buttonStyle(.plain)
         .id(PlayerFocusTarget.nextEpisode)
         .focused($focusedTarget, equals: .nextEpisode)
+        .onExitCommand {
+            handleBackCommand()
+        }
         .accessibilityIdentifier("player.nextEpisode")
     }
 
@@ -796,6 +826,9 @@ struct PlayerScreen: View {
                 }
                 .id(PlayerFocusTarget.subtitle("off"))
                 .focused($focusedTarget, equals: .subtitle("off"))
+                .onExitCommand {
+                    handleBackCommand()
+                }
 
                 let names = coordinator.subtitleTrackNames
                 if names.isEmpty {
@@ -817,6 +850,9 @@ struct PlayerScreen: View {
                         }
                         .id(PlayerFocusTarget.subtitle(String(index)))
                         .focused($focusedTarget, equals: .subtitle(String(index)))
+                        .onExitCommand {
+                            handleBackCommand()
+                        }
                     }
                 }
             }
@@ -852,6 +888,9 @@ struct PlayerScreen: View {
                         }
                         .id(PlayerFocusTarget.audio(String(index)))
                         .focused($focusedTarget, equals: .audio(String(index)))
+                        .onExitCommand {
+                            handleBackCommand()
+                        }
                     }
                 }
                 .padding(.horizontal, 44)
@@ -928,6 +967,9 @@ struct PlayerScreen: View {
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
         .buttonStyle(.plain)
+        .onExitCommand {
+            handleBackCommand()
+        }
     }
 
     // MARK: - Speed Badge View
@@ -965,7 +1007,6 @@ struct PlayerScreen: View {
     private var seekHUDView: some View {
         let duration = coordinator.playbackDuration
         let current = coordinator.playbackTime
-        let target = pendingSeekTarget ?? current
         let bufferedTime = coordinator.bufferedTime
         let bufferedRanges = coordinator.bufferedRanges
 
@@ -1199,6 +1240,7 @@ private struct DrawerEpisodeCard: View {
     /// known, otherwise the series backdrop, otherwise nil for a placeholder.
     let artworkURL: URL?
     let action: () -> Void
+    var onExit: (() -> Void)? = nil
 
     @Environment(\.isFocused) private var isFocused
 
@@ -1317,6 +1359,9 @@ private struct DrawerEpisodeCard: View {
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
         .buttonStyle(.plain)
+        .onExitCommand {
+            onExit?()
+        }
     }
 
     @ViewBuilder
