@@ -28,3 +28,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## TVVLCKit (VideoLAN)
+
+- **Component:** TVVLCKit for tvOS
+- **Version:** 3.7.2 (LibVLC 3.0.x core, commit `3e42ae47`)
+- **Archive URL:** `https://download.videolan.org/cocoapods/prod/TVVLCKit-3.7.2-3e42ae47-79128878.tar.xz`
+- **Archive SHA-256:** `fa264c2eb17d648669d9d12b51e76e5b6769828354517d09b340387b30825f58`
+- **Included License File:** `TVVLCKit-binary/COPYING.txt` identifying GNU Lesser General Public License Version 2.1, February 1999 (full text available in `LICENSES/LGPL-2.1.txt`).
+
+### Notice and Licensing Scope
+
+The pinned upstream archive includes `TVVLCKit-binary/COPYING.txt` identifying the GNU Lesser General Public License Version 2.1 (LGPL-2.1); this notice does not independently establish the license of every bundled component. This notice does not claim or imply that every bundled, linked, or transitive third-party component within LibVLC/TVVLCKit shares this exact license, nor does this notice alone establish legal compliance. Distribution review may still need corresponding source, relinking mechanisms, and accompanying materials per applicable license terms for all included modules. This documentation is provided for informational purposes and does not constitute legal advice.

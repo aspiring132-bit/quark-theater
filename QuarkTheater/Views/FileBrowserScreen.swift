@@ -156,26 +156,28 @@ struct FileBrowserScreen: View {
         let iconName = file.isDirectory ? "folder.fill" : (file.isVideo ? "film" : "doc")
         let detail = file.isDirectory ? "文件夹" : fileDescription(file)
         let trailingIcon = file.isDirectory ? "chevron.right" : "info.circle"
-        return Button {
-            if file.isDirectory { Task { await model.open(file) } }
-            else if file.isVideo { selectedVideo = file }
-            else { showPlaybackNotice = true }
-        } label: {
-            HStack(spacing: 28) {
-                Image(systemName: iconName).font(.system(size: 36)).frame(width: 50)
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(verbatim: file.name).lineLimit(2)
-                    Text(verbatim: detail).font(.caption).foregroundStyle(.secondary)
+        return HStack(spacing: 14) {
+            Button {
+                if file.isDirectory { Task { await model.open(file) } }
+                else if file.isVideo { selectedVideo = file }
+                else { showPlaybackNotice = true }
+            } label: {
+                HStack(spacing: 28) {
+                    Image(systemName: iconName).font(.system(size: 36)).frame(width: 50)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(verbatim: file.name).lineLimit(2)
+                        Text(verbatim: detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: trailingIcon)
                 }
-                Spacer()
-                Image(systemName: trailingIcon)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
+            .buttonStyle(.bordered)
+            .focused($focusedTarget, equals: .file(file.fileId))
+            .disabled(model.isLoading)
         }
-        .buttonStyle(.bordered)
-        .focused($focusedTarget, equals: .file(file.fileId))
-        .disabled(model.isLoading)
     }
 
     @ViewBuilder

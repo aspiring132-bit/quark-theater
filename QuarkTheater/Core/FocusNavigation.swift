@@ -142,7 +142,7 @@ enum FocusDiagnostics {
         switch target {
         case .drawerTrigger, .drawerTab, .closeDrawer: return .playerDrawer
         case .episode, .nextEpisode: return .playerEpisode
-        case .subtitle, .audio, .silentMarker: return .playerOption
+        case .subtitle, .audio, .silentMarker, .skipIntro, .skipOutro: return .playerOption
         }
     }
 }
@@ -160,6 +160,8 @@ enum PlayerFocusTarget: Hashable {
     case drawerTab(String)
     case closeDrawer
     case silentMarker
+    case skipIntro
+    case skipOutro
     case nextEpisode
     case episode(String)
     case subtitle(String)
@@ -183,7 +185,8 @@ enum PlayerSeekMath {
 
     static func target(current: Double, direction: PlayerSeekDirection, interval: Int, duration: Double?) -> Double? {
         guard current.isFinite, current >= 0 else { return nil }
-        let seconds = Double(normalizedInterval(interval))
+        guard interval > 0 else { return current }
+        let seconds = Double(interval)
         let candidate = direction == .forward ? current + seconds : current - seconds
         guard candidate.isFinite else { return nil }
         guard let duration, duration.isFinite, duration > 0 else { return max(0, candidate) }
@@ -217,5 +220,21 @@ enum PlayerSeekPreference {
             return defaultInterval
         }
         return value
+    }
+}
+
+enum PlayerSeekHUDPolicy {
+    static let quietPeriod: TimeInterval = 3
+
+    static func shouldHide(now: Date, lastInteraction: Date?) -> Bool {
+        guard let lastInteraction else { return false }
+        return now.timeIntervalSince(lastInteraction) >= quietPeriod
+    }
+}
+
+enum PlayerSeekRepeatPolicy {
+    static func interval(configured: Int, repeatCount: Int) -> Int {
+        let base = PlayerSeekMath.normalizedInterval(configured)
+        return base * min(max(repeatCount + 1, 1), 4)
     }
 }

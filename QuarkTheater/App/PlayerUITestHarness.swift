@@ -35,7 +35,7 @@ final class UITestPlaybackClient: QuarkClient {
     func logout() async throws {}
 }
 
-/// Generates a tiny local H.264 clip once per install so KSPlayer has a real,
+/// Generates a tiny local H.264 clip once per install so VLC has a real,
 /// fully offline media source. Every frame is a keyframe
 /// (`maxKeyFrameInterval = 1`) so seek targets land exactly where the reducer
 /// asked, which is what makes the 10/15-second assertions deterministic.
@@ -154,13 +154,13 @@ final class UITestPlayerProbe: ObservableObject {
     }
 
     private func sample() {
-        guard let player = coordinator?.ksCoordinator.playerLayer?.player else {
+        guard let coordinator else {
             playState = "loading"
             return
         }
-        playState = player.isPlaying ? "playing" : "paused"
-        timeText = String(format: "%.2f", player.currentPlaybackTime)
-        durationText = String(format: "%.2f", player.duration)
+        playState = coordinator.isPlaying ? "playing" : "paused"
+        timeText = String(format: "%.2f", coordinator.playbackTime)
+        durationText = String(format: "%.2f", coordinator.playbackDuration)
     }
 }
 

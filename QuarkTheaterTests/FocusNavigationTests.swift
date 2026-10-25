@@ -54,6 +54,7 @@ final class FocusNavigationTests: XCTestCase {
 
     func testSeekMathClampsAndNormalizesIntervals() {
         XCTAssertEqual(PlayerSeekMath.normalizedInterval(15), 15)
+        XCTAssertEqual(PlayerSeekMath.normalizedInterval(10), 10)
         XCTAssertEqual(PlayerSeekMath.normalizedInterval(12), 10)
         XCTAssertEqual(PlayerSeekMath.target(current: 20, direction: .backward, interval: 10, duration: 100), 10)
         XCTAssertEqual(PlayerSeekMath.target(current: 5, direction: .backward, interval: 15, duration: 100), 0)
@@ -62,6 +63,35 @@ final class FocusNavigationTests: XCTestCase {
         XCTAssertEqual(PlayerSeekMath.target(current: 5, direction: .forward, interval: 10, duration: nil), 15)
         XCTAssertEqual(PlayerSeekMath.nextTarget(current: 10, pending: nil, inFlight: 20, direction: .forward, interval: 10, duration: 100), 30)
         XCTAssertEqual(PlayerSeekMath.nextTarget(current: 10, pending: 20, inFlight: 30, direction: .forward, interval: 10, duration: 100), 30)
+    }
+
+    func testSeekMathPreservesRepeatedIntervalsAndBounds() {
+        // Regression tests: repeated intervals (20/30/40 and 30/45/60) must not collapse to 10
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .forward, interval: 20, duration: 1000), 120)
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .forward, interval: 30, duration: 1000), 130)
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .forward, interval: 40, duration: 1000), 140)
+
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .forward, interval: 30, duration: 1000), 130)
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .forward, interval: 45, duration: 1000), 145)
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .forward, interval: 60, duration: 1000), 160)
+
+        // Backward repeated intervals
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .backward, interval: 20, duration: 1000), 80)
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .backward, interval: 30, duration: 1000), 70)
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .backward, interval: 40, duration: 1000), 60)
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .backward, interval: 45, duration: 1000), 55)
+        XCTAssertEqual(PlayerSeekMath.target(current: 100, direction: .backward, interval: 60, duration: 1000), 40)
+
+        // Boundary and cap tests
+        // Clamping to duration cap
+        XCTAssertEqual(PlayerSeekMath.target(current: 980, direction: .forward, interval: 40, duration: 1000), 1000)
+        XCTAssertEqual(PlayerSeekMath.target(current: 980, direction: .forward, interval: 60, duration: 1000), 1000)
+        // Clamping to 0 lower boundary
+        XCTAssertEqual(PlayerSeekMath.target(current: 25, direction: .backward, interval: 30, duration: 1000), 0)
+        XCTAssertEqual(PlayerSeekMath.target(current: 25, direction: .backward, interval: 60, duration: 1000), 0)
+        // Invalid current position
+        XCTAssertNil(PlayerSeekMath.target(current: -1, direction: .forward, interval: 20, duration: 1000))
+        XCTAssertNil(PlayerSeekMath.target(current: .nan, direction: .forward, interval: 20, duration: 1000))
     }
 
     func testDiagnosticProjectionFiltersNewestFirstAndHandlesEmpty() {
@@ -109,5 +139,49 @@ final class FocusNavigationTests: XCTestCase {
         XCTAssertGreaterThan(DrawerButtonFocusStyle.scale(isFocused: true), 1.0)
         XCTAssertEqual(DrawerButtonFocusStyle.scale(isFocused: true), 1.06, accuracy: 0.02)
         XCTAssertTrue(DrawerButtonFocusStyle.prefersPlainButtonStyle)
+    }
+
+    // MARK: - Drawer Navigation & Audio Tab Tests
+    func testDrawerBackOnlyClosesDrawerAndNeverDismissesPlayer() {
+        var state = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: .episode("f1"),
+            canPlayNext: true,
+            currentPlaybackTime: 10,
+            duration: 100,
+            episodeFileIDs: ["f1", "f2"],
+            currentEpisodeFileID: "f1"
+        )
+        let action = PlayerInputReducer.handleBack(state: state)
+        XCTAssertEqual(action, .closeDrawer, "Back key when drawer is open MUST only close drawer, never dismiss player")
+
+        state.isDrawerOpen = false
+        let closedAction = PlayerInputReducer.handleBack(state: state)
+        XCTAssertEqual(closedAction, .none, "Back key when drawer is closed returns none (allowing player screen to dismiss)")
+    }
+
+    func testAudioTabDefaultTargetWhenNoTracksPointsToTabNotSilentMarker() {
+        let target = PlayerInputReducer.defaultContentTarget(
+            tab: "音轨",
+            canPlayNext: false,
+            episodeFileIDs: [],
+            subtitleTrackIDs: [],
+            audioTrackIDs: [], // No audio tracks
+            currentEpisodeFileID: nil
+        )
+        XCTAssertEqual(target, .drawerTab("音轨"), "When no audio tracks exist, should not point to silent marker or fake 0")
+    }
+
+    func testDrawerDefaultContentTargetSelectsCurrentPlayingEpisode() {
+        let target = PlayerInputReducer.defaultContentTarget(
+            tab: "选集",
+            canPlayNext: true,
+            episodeFileIDs: ["f1", "f2", "f3"],
+            subtitleTrackIDs: [],
+            audioTrackIDs: [],
+            currentEpisodeFileID: "f2"
+        )
+        XCTAssertEqual(target, .episode("f2"), "Drawer open must default focus to current playing episode")
     }
 }

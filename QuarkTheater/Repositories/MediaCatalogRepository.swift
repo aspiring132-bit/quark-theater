@@ -28,6 +28,13 @@ struct LearnedAlias: Identifiable, Equatable {
     var id: String { "\(mediaType.rawValue):\(sourceTitle)" }
 }
 
+struct MarkerCachePayload: Codable, Equatable {
+    let intro: PlaybackSegmentRange?
+    let outro: PlaybackSegmentRange?
+    let fetchedAt: Date
+    let expiresAt: Date
+}
+
 /// Stores only explicitly confirmed metadata, separated by account and cloud file.
 @MainActor
 final class MediaCatalogRepository {
@@ -68,6 +75,15 @@ final class MediaCatalogRepository {
           created_at REAL NOT NULL,
           updated_at REAL NOT NULL,
           PRIMARY KEY(account_id, media_type, source_title));
+        CREATE TABLE IF NOT EXISTS media_marker_cache (
+          cache_key TEXT PRIMARY KEY NOT NULL,
+          provider TEXT NOT NULL,
+          tmdb_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          file_id TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          expires_at REAL NOT NULL);
         """
         guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else {
             let code = sqlite3_errcode(opened)
@@ -219,6 +235,68 @@ final class MediaCatalogRepository {
             sqlite3_finalize(statement)
         }
         return items
+    }
+
+    func confirmedItem(accountID: String, fileID: String) throws -> MediaItem? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT payload FROM media_catalog WHERE account_id=? AND file_id=?", -1, &statement, nil) == SQLITE_OK,
+              let statement else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+        defer { sqlite3_finalize(statement) }
+        bind(accountID, statement, 1)
+        bind(fileID, statement, 2)
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return nil }
+        guard code == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else { return nil }
+        let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
+        return try? JSONDecoder().decode(MediaItem.self, from: data)
+    }
+
+    // MARK: - Marker Cache (F-001)
+
+    func markerCache(key: String) -> MarkerCachePayload? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT payload, expires_at FROM media_marker_cache WHERE cache_key=?", -1, &statement, nil) == SQLITE_OK,
+              let statement else { return nil }
+        defer { sqlite3_finalize(statement) }
+        bind(key, statement, 1)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        let expiresAtTime = sqlite3_column_double(statement, 1)
+        guard Date().timeIntervalSince1970 < expiresAtTime else { return nil }
+        guard let textBytes = sqlite3_column_text(statement, 0) else { return nil }
+        let jsonString = String(cString: textBytes)
+        guard let data = jsonString.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(MarkerCachePayload.self, from: data)
+    }
+
+    func saveMarkerCache(
+        key: String,
+        provider: String,
+        tmdbID: Int,
+        season: Int,
+        episode: Int,
+        fileID: String,
+        payload: MarkerCachePayload
+    ) {
+        guard let data = try? JSONEncoder().encode(payload),
+              let jsonString = String(data: data, encoding: .utf8) else { return }
+        var statement: OpaquePointer?
+        let sql = """
+        INSERT INTO media_marker_cache (cache_key, provider, tmdb_id, season_number, episode_number, file_id, payload, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload, expires_at=excluded.expires_at;
+        """
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return }
+        defer { sqlite3_finalize(statement) }
+        bind(key, statement, 1)
+        bind(provider, statement, 2)
+        bind(tmdbID, statement, 3)
+        bind(season, statement, 4)
+        bind(episode, statement, 5)
+        bind(fileID, statement, 6)
+        bind(jsonString, statement, 7)
+        bind(payload.expiresAt.timeIntervalSince1970, statement, 8)
+        _ = sqlite3_step(statement)
     }
 
     func clearAll(accountID: String) throws {
@@ -393,5 +471,13 @@ final class MediaCatalogRepository {
 
     private func bind(_ value: String, _ statement: OpaquePointer, _ index: Int32) {
         _ = value.withCString { sqlite3_bind_text(statement, index, $0, -1, transient) }
+    }
+
+    private func bind(_ value: Int, _ statement: OpaquePointer, _ index: Int32) {
+        _ = sqlite3_bind_int64(statement, index, Int64(value))
+    }
+
+    private func bind(_ value: Double, _ statement: OpaquePointer, _ index: Int32) {
+        _ = sqlite3_bind_double(statement, index, value)
     }
 }

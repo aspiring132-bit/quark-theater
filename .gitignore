@@ -20,3 +20,4 @@ xcuserdata/
 .env
 .env.*
 __pycache__/
+/Frameworks/TVVLCKit.xcframework/
