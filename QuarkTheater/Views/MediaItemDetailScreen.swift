@@ -22,6 +22,7 @@ struct MediaItemDetailScreen: View {
     @State private var showRematchSheet = false
     @State private var selectedSeason: Int = 1
     @State private var watchProgressByFileId: [String: Double] = [:]
+    @State private var watchHistoryByFileId: [String: WatchHistory] = [:]
     @FocusState private var focusedEpisodeID: String?
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
 
@@ -162,15 +163,11 @@ struct MediaItemDetailScreen: View {
     }
 
     private var resumeEpisode: (MediaItem, CloudFile, ParsedMediaName)? {
-        let inProgress = episodes.first(where: {
-            let progress = watchProgressByFileId[$0.1.fileId] ?? 0
-            return progress > 0 && progress < 0.95
-        })
-        if inProgress != nil { return inProgress }
-        if item.mediaType == .series {
-            return episodes.first(where: { $0.2.episodeNumber != nil })
-        }
-        return episodes.first
+        EpisodeResumeResolver.resolve(
+            episodes: episodes,
+            historyByFileID: watchHistoryByFileId,
+            isSeries: item.mediaType == .series
+        )
     }
 
     var body: some View {
@@ -224,6 +221,12 @@ struct MediaItemDetailScreen: View {
                             HStack(spacing: 20) {
                                 if let target = resumeEpisode {
                                     Button {
+                                        diagnostics.record(
+                                            category: .navigation,
+                                            level: .info,
+                                            event: .episodeSelectionRequested,
+                                            metadata: target.2.episodeNumber.map { [.episodeNumber($0)] } ?? []
+                                        )
                                         selectedFile = target.1
                                     } label: {
                                         let epNum = target.2.episodeNumber
@@ -335,13 +338,19 @@ struct MediaItemDetailScreen: View {
                 selectedSeason = firstSeason
                 focusedEpisodeID = seasonGroups[firstSeason]?.first?.1.fileId
             }
-            // Load watch history progress
+            // Load watch history atomically in batch to avoid multi-render race conditions
+            var batchHistories: [String: WatchHistory] = [:]
+            var batchProgress: [String: Double] = [:]
             for ep in episodes {
-                if let record = try? history.history(accountID: accountID, fileID: ep.1.fileId),
-                   record.durationSeconds > 0 {
-                    watchProgressByFileId[ep.1.fileId] = record.positionSeconds / record.durationSeconds
+                if let record = try? history.history(accountID: accountID, fileID: ep.1.fileId) {
+                    batchHistories[ep.1.fileId] = record
+                    if record.durationSeconds > 0 {
+                        batchProgress[ep.1.fileId] = record.positionSeconds / record.durationSeconds
+                    }
                 }
             }
+            watchHistoryByFileId = batchHistories
+            watchProgressByFileId = batchProgress
         }
         .onChange(of: selectedSeason) { _, season in
             focusedEpisodeID = seasonGroups[season]?.first?.1.fileId

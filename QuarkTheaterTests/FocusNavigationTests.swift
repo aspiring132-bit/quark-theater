@@ -140,4 +140,48 @@ final class FocusNavigationTests: XCTestCase {
         XCTAssertEqual(DrawerButtonFocusStyle.scale(isFocused: true), 1.06, accuracy: 0.02)
         XCTAssertTrue(DrawerButtonFocusStyle.prefersPlainButtonStyle)
     }
+
+    // MARK: - Drawer Navigation & Audio Tab Tests
+    func testDrawerBackOnlyClosesDrawerAndNeverDismissesPlayer() {
+        var state = PlayerInputState(
+            isDrawerOpen: true,
+            selectedDrawerTab: "选集",
+            focusedTarget: .episode("f1"),
+            canPlayNext: true,
+            currentPlaybackTime: 10,
+            duration: 100,
+            episodeFileIDs: ["f1", "f2"],
+            currentEpisodeFileID: "f1"
+        )
+        let action = PlayerInputReducer.handleBack(state: state)
+        XCTAssertEqual(action, .closeDrawer, "Back key when drawer is open MUST only close drawer, never dismiss player")
+
+        state.isDrawerOpen = false
+        let closedAction = PlayerInputReducer.handleBack(state: state)
+        XCTAssertEqual(closedAction, .none, "Back key when drawer is closed returns none (allowing player screen to dismiss)")
+    }
+
+    func testAudioTabDefaultTargetWhenNoTracksPointsToTabNotSilentMarker() {
+        let target = PlayerInputReducer.defaultContentTarget(
+            tab: "音轨",
+            canPlayNext: false,
+            episodeFileIDs: [],
+            subtitleTrackIDs: [],
+            audioTrackIDs: [], // No audio tracks
+            currentEpisodeFileID: nil
+        )
+        XCTAssertEqual(target, .drawerTab("音轨"), "When no audio tracks exist, should not point to silent marker or fake 0")
+    }
+
+    func testDrawerDefaultContentTargetSelectsCurrentPlayingEpisode() {
+        let target = PlayerInputReducer.defaultContentTarget(
+            tab: "选集",
+            canPlayNext: true,
+            episodeFileIDs: ["f1", "f2", "f3"],
+            subtitleTrackIDs: [],
+            audioTrackIDs: [],
+            currentEpisodeFileID: "f2"
+        )
+        XCTAssertEqual(target, .episode("f2"), "Drawer open must default focus to current playing episode")
+    }
 }

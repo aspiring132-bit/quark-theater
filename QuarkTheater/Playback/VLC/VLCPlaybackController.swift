@@ -16,16 +16,24 @@ enum VLCPlaybackObservableState: Equatable {
 }
 
 enum VLCPlaybackStateMapper {
-    /// Values mirror VLCMediaPlayerState in TVVLCKit.
-    static func map(rawValue: Int) -> VLCPlaybackObservableState {
+    /// Values mirror VLCMediaPlayerState in TVVLCKit (VLCMediaPlayer.h:55-65).
+    static func map(rawValue: Int, currentState: VLCPlaybackObservableState? = nil) -> VLCPlaybackObservableState {
         switch rawValue {
         case 0: return .idle
-        case 1, 7: return .loading
+        case 1: return .loading
         case 2: return .buffering
         case 3: return .ended
         case 4: return .failed
         case 5: return .playing
         case 6: return .paused
+        case 7:
+            // VLCMediaPlayerStateESAdded: Elementary Stream added (VLCMediaPlayer.h:64).
+            // Informational track discovery event; unconditionally preserves currentState when known,
+            // or defaults to neutral .idle when unknown.
+            if let currentState {
+                return currentState
+            }
+            return .idle
         default: return .failed
         }
     }
@@ -278,7 +286,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
         guard let player else { return }
 
         let raw = player.state.rawValue
-        let mapped = VLCPlaybackStateMapper.map(rawValue: raw)
+        let mapped = VLCPlaybackStateMapper.map(rawValue: raw, currentState: self.state)
         let engineState = VLCPlaybackStateMapper.engineState(for: mapped)
         updateFromPlayer(state: engineState)
 
@@ -293,9 +301,9 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
             )
             fail(error)
         case .playing, .paused:
+            discoverTracks()
             if readyGeneration != generation {
                 readyGeneration = generation
-                discoverTracks()
                 emit(.ready(snapshot))
             } else {
                 emit(.stateChanged(snapshot))
@@ -317,8 +325,13 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
 
     func pollSnapshot() {
         guard let player else { return }
-        let mapped = VLCPlaybackStateMapper.map(rawValue: player.state.rawValue)
+        let priorState = snapshot.state
+        let mapped = VLCPlaybackStateMapper.map(rawValue: player.state.rawValue, currentState: self.state)
         updateFromPlayer(state: VLCPlaybackStateMapper.engineState(for: mapped))
+
+        if snapshot.state != priorState {
+            emit(.stateChanged(snapshot))
+        }
 
         let now = Date()
         let periodic = lastPeriodicDiagnosticDate.map {
@@ -343,8 +356,14 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
     private func updateFromPlayer(state: PlaybackEngineState) {
         guard let player else { return }
         let time = max(0, (player.time.value?.doubleValue ?? 0) / 1000)
-        let duration = max(0, (player.media?.length.value?.doubleValue ?? 0) / 1000)
-        let rate = Double(media?.statistics.inputBitrate ?? 0)
+        var duration = max(0, (player.media?.length.value?.doubleValue ?? 0) / 1000)
+        if duration <= 0, let proxyDuration = originProxy?.activeVODDuration(), proxyDuration > 0 {
+            duration = proxyDuration
+        }
+        var rate: Double = 0
+        if let proxyRate = originProxy?.currentThroughputBytesPerSecond(), proxyRate > 0 {
+            rate = proxyRate
+        }
 
         isSeekable = player.isSeekable
         hasVideoOutput = player.hasVideoOut
@@ -357,6 +376,8 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
             audioVolume = min(max(Double(audio.volume) / 100, 0), 1)
         }
 
+        originProxy?.updatePlayhead(time)
+        let ranges = originProxy?.currentBufferedRanges() ?? []
         updateSnapshot(
             state: state,
             time: time,
@@ -364,7 +385,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
             buffered: 0,
             networkRate: rate,
             hasVideoOutput: player.hasVideoOut,
-            bufferedRanges: []
+            bufferedRanges: ranges
         )
     }
 
@@ -522,7 +543,6 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
     private func isCurrent(notifyingObjectID: ObjectIdentifier?) -> Bool {
         guard let player, let notifyingObjectID else { return false }
         guard ObjectIdentifier(player) == notifyingObjectID else { return false }
-        guard let media, player.media === media else { return false }
         return true
     }
 

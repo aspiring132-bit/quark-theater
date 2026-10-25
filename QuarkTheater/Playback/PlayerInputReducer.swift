@@ -160,7 +160,7 @@ enum PlayerInputReducer {
             return .none
 
         case "音轨":
-            let items: [PlayerFocusTarget] = (state.audioTrackIDs.isEmpty ? ["0"] : state.audioTrackIDs).map { .audio($0) }
+            let items: [PlayerFocusTarget] = state.audioTrackIDs.map { .audio($0) }
             guard !items.isEmpty else { return .none }
             guard let current = state.focusedTarget, let idx = items.firstIndex(of: current) else {
                 return .focusTarget(items[0])
@@ -197,7 +197,7 @@ enum PlayerInputReducer {
             return .subtitle("off")
         case "音轨":
             if let first = audioTrackIDs.first { return .audio(first) }
-            return .audio("0")
+            return .drawerTab(tab)
         default:
             return .drawerTab(tab)
         }

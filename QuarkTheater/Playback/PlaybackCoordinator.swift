@@ -132,6 +132,7 @@ final class PlaybackCoordinator: ObservableObject {
     var currentPlayingFile: CloudFile { currentFile }
     var playlistQueue: [CloudFile] { queue }
     var playbackCorrelation: DiagnosticCorrelationID? { playbackCorrelationID }
+    private(set) var lastRequestedPlaybackFileID: String?
 
     var isLoading: Bool {
         isResolvingResource || snapshot.state == .loading
@@ -204,6 +205,17 @@ final class PlaybackCoordinator: ObservableObject {
         bufferingPolicyState = PlaybackBufferingPolicy.State.reset(for: generation)
         isCurrentPlaybackStarted = false
         isPlaybackTransitionActive = true
+        var selectionMetadata: [DiagnosticMetadata] = [.switchGeneration(requestGeneration)]
+        if let ordinal = queue.firstIndex(where: { $0.fileId == currentFile.fileId }) {
+            selectionMetadata.append(.episodeOrdinal(ordinal))
+        }
+        diagnostics.record(
+            category: .playback,
+            level: .info,
+            event: .episodeSelectionRequested,
+            correlationID: playbackCorrelationID,
+            metadata: selectionMetadata
+        )
         defer {
             if requestGeneration == generation { isResolvingResource = false }
         }
@@ -475,6 +487,7 @@ final class PlaybackCoordinator: ObservableObject {
 
     private func resolveAndPlay(file: CloudFile, at position: Double, requestGeneration: Int) async throws {
         let requestedFile = file
+        lastRequestedPlaybackFileID = requestedFile.fileId
         message = nil
         let resource: PlaybackResource
         do {
@@ -664,10 +677,8 @@ final class PlaybackCoordinator: ObservableObject {
             stopSnapshotPolling()
             handlePlaybackFailure(error)
 
-        case .diagnostic(let snapshot):
-            if snapshot.state == .buffering || snapshot.state == .loading {
-                networkSpeedText = ""
-            }
+        case .diagnostic:
+            break
         }
     }
 
@@ -731,6 +742,8 @@ final class PlaybackCoordinator: ObservableObject {
             } else {
                 networkSpeedText = String(format: "%.0f KB/s", speedKB)
             }
+        } else {
+            networkSpeedText = ""
         }
     }
 
@@ -920,5 +933,56 @@ final class PlaybackCoordinator: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
             audioRouteObserver = nil
         }
+    }
+}
+
+// MARK: - Episode Resume Resolver
+/// Pure episode resume resolver using complete WatchHistory (lastWatchedAt and completed).
+enum EpisodeResumeResolver {
+    static func resolve(
+        episodes: [(MediaItem, CloudFile, ParsedMediaName)],
+        historyByFileID: [String: WatchHistory],
+        isSeries: Bool
+    ) -> (MediaItem, CloudFile, ParsedMediaName)? {
+        guard !episodes.isEmpty else { return nil }
+
+        // 1. Check if any episode has watch history
+        let episodesWithHistory = episodes.compactMap { ep -> (ep: (MediaItem, CloudFile, ParsedMediaName), history: WatchHistory)? in
+            guard let hist = historyByFileID[ep.1.fileId] else { return nil }
+            return (ep, hist)
+        }
+
+        if !episodesWithHistory.isEmpty {
+            // Find the most recently watched episode by lastWatchedAt
+            let latestWatched = episodesWithHistory.max { a, b in
+                a.history.lastWatchedAt < b.history.lastWatchedAt
+            }!
+
+            let isCompleted = latestWatched.history.completed ||
+                (latestWatched.history.durationSeconds > 0 &&
+                 latestWatched.history.positionSeconds >= latestWatched.history.durationSeconds * 0.95)
+
+            if !isCompleted {
+                // Return the in-progress episode
+                return latestWatched.ep
+            } else {
+                // When completed, advance to subsequent episode
+                if let currentIndex = episodes.firstIndex(where: { $0.1.fileId == latestWatched.ep.1.fileId }),
+                   currentIndex + 1 < episodes.count {
+                    return episodes[currentIndex + 1]
+                }
+                // If it was the last episode, return the completed last episode as conservative fallback for series (avoid jumping back to S1E1)
+                if isSeries {
+                    return latestWatched.ep
+                }
+                return latestWatched.ep
+            }
+        }
+
+        // 2. No history: existing product semantics
+        if isSeries {
+            return episodes.first(where: { $0.2.episodeNumber != nil }) ?? episodes.first
+        }
+        return episodes.first
     }
 }

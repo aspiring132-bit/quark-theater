@@ -21,6 +21,444 @@ final class VLCOriginHTTPProxy: NSObject, @unchecked Sendable {
     private var routeLRU: [String] = []
     private static let maxPlaylistBytes = 2 * 1024 * 1024
     private static let maxRouteCount = 4096
+    static let maxTimelineEntries = 2000
+
+    // MARK: - Buffer Timeline & Coalescing
+
+    struct SegmentKey: Hashable, Sendable {
+        let url: URL
+        let byteRange: String?
+    }
+
+    struct ParsedSegment: Equatable, Sendable {
+        let uri: String
+        let range: PlaybackTimeRange
+        let byteRangeOffset: Int64?
+        let byteRangeLength: Int64?
+    }
+
+    struct VODTimeline: Equatable, Sendable {
+        let playlistURL: URL
+        let totalDuration: TimeInterval
+        let segments: [ParsedSegment]
+        let segmentLookup: [SegmentKey: PlaybackTimeRange]
+    }
+
+    final class NetworkThroughputTracker: @unchecked Sendable {
+        private let lock = NSLock()
+        private var samples: [(date: Date, bytes: Int64)] = []
+        private let windowSeconds: TimeInterval
+
+        init(windowSeconds: TimeInterval = 2.0) {
+            self.windowSeconds = windowSeconds
+        }
+
+        func record(bytes: Int64, at date: Date = Date()) {
+            guard bytes > 0 else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            samples.append((date: date, bytes: bytes))
+            prune(now: date)
+        }
+
+        func currentBytesPerSecond(at date: Date = Date()) -> Double? {
+            lock.lock()
+            defer { lock.unlock() }
+            prune(now: date)
+            guard samples.count >= 2, let first = samples.first, let last = samples.last else {
+                return nil
+            }
+            let duration = last.date.timeIntervalSince(first.date)
+            guard duration >= 0.2 else { return nil }
+            let totalBytes = samples.reduce(0) { $0 + $1.bytes }
+            return Double(totalBytes) / duration
+        }
+
+        private func prune(now: Date) {
+            let cutoff = now.addingTimeInterval(-windowSeconds)
+            samples.removeAll { $0.date < cutoff }
+        }
+    }
+
+    struct PlaybackRangeCoalescer: Equatable, Sendable {
+        private(set) var ranges: [PlaybackTimeRange] = []
+        private let maxRanges: Int
+        private let epsilon: TimeInterval
+
+        init(maxRanges: Int = 50, epsilon: TimeInterval = 0.1) {
+            self.maxRanges = maxRanges
+            self.epsilon = epsilon
+        }
+
+        mutating func add(_ newRange: PlaybackTimeRange, playhead: TimeInterval? = nil) {
+            guard newRange.start < newRange.end else { return }
+            var combined = newRange
+            var kept: [PlaybackTimeRange] = []
+
+            for range in ranges {
+                // If adjacent or overlapping
+                if !(combined.end + epsilon < range.start || combined.start > range.end + epsilon) {
+                    combined = PlaybackTimeRange(
+                        start: min(combined.start, range.start),
+                        end: max(combined.end, range.end)
+                    )
+                } else {
+                    kept.append(range)
+                }
+            }
+
+            var merged: [PlaybackTimeRange] = []
+            var inserted = false
+            for range in kept {
+                if !inserted && combined.start < range.start {
+                    merged.append(combined)
+                    inserted = true
+                }
+                merged.append(range)
+            }
+            if !inserted {
+                merged.append(combined)
+            }
+
+            if merged.count > maxRanges {
+                if let playhead {
+                    // Evict ranges furthest from playhead
+                    // Distance is 0 if playhead is inside range, otherwise distance to nearest boundary
+                    let sortedByDistance = merged.sorted { r1, r2 in
+                        let d1 = Self.distance(from: playhead, to: r1)
+                        let d2 = Self.distance(from: playhead, to: r2)
+                        if d1 != d2 {
+                            return d1 < d2
+                        }
+                        return r1.start < r2.start
+                    }
+                    let retained = Set(sortedByDistance.prefix(maxRanges))
+                    merged = merged.filter { retained.contains($0) }
+                } else {
+                    merged = Array(merged.prefix(maxRanges))
+                }
+            }
+            ranges = merged
+        }
+
+        private static func distance(from playhead: TimeInterval, to range: PlaybackTimeRange) -> TimeInterval {
+            if playhead < range.start {
+                return range.start - playhead
+            } else if playhead > range.end {
+                return playhead - range.end
+            } else {
+                return 0.0
+            }
+        }
+    }
+
+    /// Master playlist video variant URLs (canonical, fully-resolved).
+    /// Alt audio and subtitles playlists are excluded.
+    private var videoVariantPlaylistURLs: Set<URL> = []
+    /// Per-media-playlist timelines indexed by canonical playlist URL.
+    private var mediaPlaylists: [URL: VODTimeline] = [:]
+    /// Active media playlist URL when deterministically known.
+    private var activeMediaPlaylistURL: URL?
+    private var lastObservedPlayhead: TimeInterval = 0.0
+    private var rangeCoalescer = PlaybackRangeCoalescer()
+    private let throughputTracker = NetworkThroughputTracker()
+
+    func updatePlayhead(_ time: TimeInterval) {
+        queue.async { [weak self] in
+            guard let self, time.isFinite, time >= 0 else { return }
+            self.lastObservedPlayhead = time
+        }
+    }
+
+    func currentBufferedRanges() -> [PlaybackTimeRange] {
+        queue.sync { rangeCoalescer.ranges }
+    }
+
+    func activeVODDuration() -> TimeInterval? {
+        queue.sync {
+            if let activeURL = self.activeMediaPlaylistURL, let timeline = self.mediaPlaylists[activeURL], timeline.totalDuration > 0 {
+                return timeline.totalDuration
+            }
+            for (_, timeline) in self.mediaPlaylists {
+                if timeline.totalDuration > 0 { return timeline.totalDuration }
+            }
+            return nil
+        }
+    }
+
+    func currentThroughputBytesPerSecond() -> Double? {
+        throughputTracker.currentBytesPerSecond()
+    }
+
+    func recordUpstreamBytes(_ bytes: Int64) {
+        throughputTracker.record(bytes: bytes)
+    }
+
+    static func extractVariantPlaylistURLs(manifestText: String, masterURL: URL) -> Set<URL> {
+        let lines = manifestText.components(separatedBy: .newlines)
+        var variants: Set<URL> = []
+        var nextIsVariant = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+
+            if trimmed.hasPrefix("#EXT-X-STREAM-INF:") {
+                nextIsVariant = true
+            } else if trimmed.hasPrefix("#") {
+                // Ignore all other tags including #EXT-X-MEDIA:TYPE=AUDIO / SUBTITLES
+                nextIsVariant = false
+            } else if nextIsVariant {
+                if let url = URL(string: trimmed, relativeTo: masterURL)?.absoluteURL {
+                    variants.insert(url)
+                }
+                nextIsVariant = false
+            }
+        }
+        return variants
+    }
+
+    static func isSegmentCompletionValid(
+        requestedRange: String?,
+        statusCode: Int,
+        contentRange: String?,
+        contentLength: Int64?,
+        receivedBytes: Int64
+    ) -> Bool {
+        guard receivedBytes > 0 else { return false }
+        let trimmedReq = requestedRange?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isRangeRequest = !(trimmedReq?.isEmpty ?? true)
+
+        if isRangeRequest {
+            guard statusCode == 206 else { return false }
+            guard let req = trimmedReq, let expectedRange = parseRequestedRange(req) else {
+                return false
+            }
+            guard let cr = contentRange, let responseRange = parseContentRange(cr) else {
+                return false
+            }
+            guard responseRange.start == expectedRange.start && responseRange.end == expectedRange.end else {
+                return false
+            }
+            guard let cl = contentLength, cl == receivedBytes else {
+                return false
+            }
+            return true
+        } else {
+            guard statusCode == 200 else { return false }
+            guard let cl = contentLength, cl == receivedBytes else {
+                return false
+            }
+            return true
+        }
+    }
+
+    private static func parseRequestedRange(_ header: String) -> (start: Int64, end: Int64)? {
+        // e.g. "bytes=100-199"
+        let trimmed = header.trimmingCharacters(in: .whitespaces)
+        guard trimmed.lowercased().hasPrefix("bytes=") else { return nil }
+        let spec = trimmed.dropFirst("bytes=".count).trimmingCharacters(in: .whitespaces)
+        let parts = spec.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        guard let start = Int64(parts[0].trimmingCharacters(in: .whitespaces)),
+              let end = Int64(parts[1].trimmingCharacters(in: .whitespaces)),
+              start >= 0, end >= start else {
+            return nil
+        }
+        return (start, end)
+    }
+
+    private static func parseContentRange(_ header: String) -> (start: Int64, end: Int64)? {
+        // e.g. "bytes 100-199/1000" or "bytes 100-199/*"
+        let trimmed = header.trimmingCharacters(in: .whitespaces)
+        guard trimmed.lowercased().hasPrefix("bytes ") else { return nil }
+        let rest = trimmed.dropFirst("bytes ".count).trimmingCharacters(in: .whitespaces)
+        let slashParts = rest.split(separator: "/", omittingEmptySubsequences: false)
+        guard slashParts.count == 2 else { return nil }
+        let rangePart = slashParts[0].trimmingCharacters(in: .whitespaces)
+        let totalPart = slashParts[1].trimmingCharacters(in: .whitespaces)
+        guard !totalPart.isEmpty else { return nil }
+        if totalPart != "*" {
+            guard let total = Int64(totalPart), total >= 0 else { return nil }
+        }
+        let dashParts = rangePart.split(separator: "-", omittingEmptySubsequences: false)
+        guard dashParts.count == 2 else { return nil }
+        guard let start = Int64(dashParts[0].trimmingCharacters(in: .whitespaces)),
+              let end = Int64(dashParts[1].trimmingCharacters(in: .whitespaces)),
+              start >= 0, end >= start else {
+            return nil
+        }
+        if totalPart != "*", let total = Int64(totalPart) {
+            guard end < total else { return nil }
+        }
+        return (start, end)
+    }
+
+    static func parseVODTimeline(manifestText: String, manifestURL: URL) -> VODTimeline? {
+        let lines = manifestText.components(separatedBy: .newlines)
+        var hasEndlist = false
+        var isExplicitVOD = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "#EXT-X-ENDLIST" {
+                hasEndlist = true
+            } else if trimmed.hasPrefix("#EXT-X-PLAYLIST-TYPE:") {
+                let val = trimmed.dropFirst("#EXT-X-PLAYLIST-TYPE:".count).trimmingCharacters(in: .whitespaces).uppercased()
+                if val == "VOD" {
+                    isExplicitVOD = true
+                }
+            }
+        }
+
+        guard hasEndlist || isExplicitVOD else {
+            return nil
+        }
+
+        var segments: [ParsedSegment] = []
+        var lookup: [SegmentKey: PlaybackTimeRange] = [:]
+
+        var currentTime: TimeInterval = 0.0
+        var pendingDuration: TimeInterval?
+        var pendingByteRange: (length: Int64, offset: Int64?)?
+        var pendingByteRangeInvalid: Bool = false
+        // Implicit byte offset must be scoped per resolved resource URI
+        var byteOffsetPerURI: [URL: Int64] = [:]
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+
+            if trimmed.hasPrefix("#EXTINF:") {
+                let rest = trimmed.dropFirst("#EXTINF:".count)
+                let durationStr = rest.split(separator: ",").first.map(String.init) ?? ""
+                if let dur = Double(durationStr), dur.isFinite, dur > 0 {
+                    pendingDuration = dur
+                } else {
+                    pendingDuration = nil
+                }
+            } else if trimmed.hasPrefix("#EXT-X-BYTERANGE:") {
+                let rest = trimmed.dropFirst("#EXT-X-BYTERANGE:".count).trimmingCharacters(in: .whitespaces)
+                let parts = rest.split(separator: "@")
+                if parts.count >= 1, let len = Int64(parts[0]), len > 0 {
+                    if parts.count > 1 {
+                        if let off = Int64(parts[1]), off >= 0 {
+                            pendingByteRange = (length: len, offset: off)
+                            pendingByteRangeInvalid = false
+                        } else {
+                            // Negative offset is malformed
+                            pendingByteRange = nil
+                            pendingByteRangeInvalid = true
+                        }
+                    } else {
+                        // Length-only offset
+                        pendingByteRange = (length: len, offset: nil)
+                        pendingByteRangeInvalid = false
+                    }
+                } else {
+                    // Length <= 0 or unparseable is malformed
+                    pendingByteRange = nil
+                    pendingByteRangeInvalid = true
+                }
+            } else if trimmed.hasPrefix("#EXT-X-DISCONTINUITY") {
+                // TVVLCKit plays on a continuous cumulative timeline; preserve currentTime
+                continue
+            } else if !trimmed.hasPrefix("#") {
+                // Segment URI line
+                if pendingByteRangeInvalid {
+                    pendingDuration = nil
+                    pendingByteRange = nil
+                    pendingByteRangeInvalid = false
+                    continue
+                }
+
+                guard let dur = pendingDuration, dur.isFinite, dur > 0 else {
+                    pendingDuration = nil
+                    pendingByteRange = nil
+                    pendingByteRangeInvalid = false
+                    continue
+                }
+                let nextTime = currentTime + dur
+                guard nextTime.isFinite, nextTime > currentTime else {
+                    pendingDuration = nil
+                    pendingByteRange = nil
+                    pendingByteRangeInvalid = false
+                    continue
+                }
+                guard let segURL = URL(string: trimmed, relativeTo: manifestURL)?.absoluteURL else {
+                    pendingDuration = nil
+                    pendingByteRange = nil
+                    pendingByteRangeInvalid = false
+                    continue
+                }
+
+                var resolvedOffset: Int64?
+                var resolvedLen: Int64?
+                var byteRangeHeader: String?
+
+                if let br = pendingByteRange {
+                    if let explicitOff = br.offset {
+                        resolvedOffset = explicitOff
+                        resolvedLen = br.length
+                        byteOffsetPerURI[segURL] = explicitOff + br.length
+                        byteRangeHeader = "bytes=\(explicitOff)-\(explicitOff + br.length - 1)"
+                    } else if let priorOffset = byteOffsetPerURI[segURL] {
+                        resolvedOffset = priorOffset
+                        resolvedLen = br.length
+                        byteOffsetPerURI[segURL] = priorOffset + br.length
+                        byteRangeHeader = "bytes=\(priorOffset)-\(priorOffset + br.length - 1)"
+                    } else {
+                        // Length-only offset without prior range for that same URI is invalid per RFC 8216
+                        pendingDuration = nil
+                        pendingByteRange = nil
+                        pendingByteRangeInvalid = false
+                        continue
+                    }
+                }
+
+                let segmentRange = PlaybackTimeRange(start: currentTime, end: nextTime)
+                currentTime = nextTime
+
+                let parsed = ParsedSegment(
+                    uri: trimmed,
+                    range: segmentRange,
+                    byteRangeOffset: resolvedOffset,
+                    byteRangeLength: resolvedLen
+                )
+                segments.append(parsed)
+
+                let key = SegmentKey(url: segURL, byteRange: byteRangeHeader)
+                lookup[key] = segmentRange
+
+                pendingDuration = nil
+                pendingByteRange = nil
+                pendingByteRangeInvalid = false
+            }
+        }
+
+        guard !segments.isEmpty else { return nil }
+
+        if segments.count > maxTimelineEntries {
+            let evictedCount = segments.count - maxTimelineEntries
+            let evictedSegments = segments.prefix(evictedCount)
+            let retainedSegments = Array(segments.suffix(maxTimelineEntries))
+
+            for evicted in evictedSegments {
+                guard let evURL = URL(string: evicted.uri, relativeTo: manifestURL)?.absoluteURL else { continue }
+                var evHeader: String?
+                if let off = evicted.byteRangeOffset, let len = evicted.byteRangeLength {
+                    evHeader = "bytes=\(off)-\(off + len - 1)"
+                }
+                let evKey = SegmentKey(url: evURL, byteRange: evHeader)
+                if lookup[evKey] == evicted.range {
+                    lookup.removeValue(forKey: evKey)
+                }
+            }
+            segments = retainedSegments
+        }
+
+        return VODTimeline(playlistURL: manifestURL, totalDuration: currentTime, segments: segments, segmentLookup: lookup)
+    }
 
     init(resource: PlaybackResource, allowLoopbackForTesting: Bool = false) {
         self.resource = resource
@@ -106,6 +544,67 @@ final class VLCOriginHTTPProxy: NSObject, @unchecked Sendable {
             self.routes.removeAll()
             self.routeTokensByURL.removeAll()
             self.routeLRU.removeAll()
+            self.videoVariantPlaylistURLs.removeAll()
+            self.mediaPlaylists.removeAll()
+            self.activeMediaPlaylistURL = nil
+            self.rangeCoalescer = PlaybackRangeCoalescer()
+        }
+    }
+
+    private func recordCompletedSegment(url: URL, byteRange: String?) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let key = SegmentKey(url: url, byteRange: byteRange)
+
+            // If we have an established active media playlist, check that first
+            if let activeURL = self.activeMediaPlaylistURL, let timeline = self.mediaPlaylists[activeURL] {
+                if let range = timeline.segmentLookup[key] {
+                    self.rangeCoalescer.add(range, playhead: self.lastObservedPlayhead)
+                    return
+                }
+            }
+
+            // Otherwise, check all requested video variant media playlists (exact URL match only)
+            for (pURL, timeline) in self.mediaPlaylists {
+                if !self.videoVariantPlaylistURLs.isEmpty && !self.videoVariantPlaylistURLs.contains(pURL) {
+                    // Ignore non-video-variant playlists (e.g. alternate audio or subtitles)
+                    continue
+                }
+                if let range = timeline.segmentLookup[key] {
+                    self.activeMediaPlaylistURL = pURL
+                    self.rangeCoalescer.add(range, playhead: self.lastObservedPlayhead)
+                    return
+                }
+            }
+        }
+    }
+
+    private func updateActiveTimeline(manifestText: String, manifestURL: URL) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let canonicalManifestURL = manifestURL.absoluteURL
+            if manifestText.contains("#EXT-X-STREAM-INF") {
+                // Master playlist - parse video variant URIs
+                let variants = Self.extractVariantPlaylistURLs(manifestText: manifestText, masterURL: canonicalManifestURL)
+                self.videoVariantPlaylistURLs = variants
+            } else if let timeline = Self.parseVODTimeline(manifestText: manifestText, manifestURL: canonicalManifestURL) {
+                // Media playlist for VOD: store per-playlist timeline
+                self.mediaPlaylists[canonicalManifestURL] = timeline
+                // If there are known video variants and this matches one, or if no master was seen, track it
+                if self.videoVariantPlaylistURLs.isEmpty || self.videoVariantPlaylistURLs.contains(canonicalManifestURL) {
+                    if self.activeMediaPlaylistURL == nil {
+                        self.activeMediaPlaylistURL = canonicalManifestURL
+                    }
+                }
+            } else {
+                // Non-VOD (sliding/live) or invalid playlist
+                // If this is a live playlist, or main stream is live, suppress ranges
+                if self.videoVariantPlaylistURLs.contains(canonicalManifestURL) || canonicalManifestURL == self.resource.url.absoluteURL {
+                    self.mediaPlaylists.removeAll()
+                    self.activeMediaPlaylistURL = nil
+                    self.rangeCoalescer = PlaybackRangeCoalescer()
+                }
+            }
         }
     }
 
@@ -251,6 +750,12 @@ final class VLCOriginHTTPProxy: NSObject, @unchecked Sendable {
         private var pendingSends = 0
         private var finishSent = false
         private var isPlaylist = false
+        private var currentRangeHeader: String?
+        private var isSegment = false
+        private var segmentStatusCode: Int?
+        private var segmentContentRange: String?
+        private var expectedSegmentLength: Int64?
+        private var receivedSegmentBytes: Int64 = 0
         private var playlistResponse: HTTPURLResponse?
         private var playlistBody = Data()
         private var cancelled = false
@@ -314,6 +819,7 @@ final class VLCOriginHTTPProxy: NSObject, @unchecked Sendable {
             currentMethod = method
             let headerLines = text.split(separator: "\r\n").dropFirst()
             let range = headerLines.first { $0.lowercased().hasPrefix("range:") }?.split(separator: ":", maxSplits: 1).dropFirst().first?.trimmingCharacters(in: .whitespaces)
+            currentRangeHeader = range
             let targetResource = proxy.resource(for: target)
             currentResource = targetResource
             guard let request = VLCOriginHTTPProxy.upstreamRequest(for: targetResource, range: range.map { String($0) }, method: method, allowLoopbackForTesting: proxy.allowLoopbackForTesting) else {
@@ -348,6 +854,14 @@ final class VLCOriginHTTPProxy: NSObject, @unchecked Sendable {
                 completionHandler(.allow)
                 return
             }
+            if currentMethod == "GET" && [200, 206].contains(http.statusCode) {
+                isSegment = true
+                segmentStatusCode = http.statusCode
+                segmentContentRange = http.value(forHTTPHeaderField: "Content-Range")
+                if let lenStr = http.value(forHTTPHeaderField: "Content-Length"), let len = Int64(lenStr) {
+                    expectedSegmentLength = len
+                }
+            }
             let allowed = Set(["Content-Length", "Content-Range", "Accept-Ranges", "Content-Type", "ETag", "Last-Modified"])
             if let encoding = http.value(forHTTPHeaderField: "Content-Encoding"),
                !encoding.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -373,6 +887,10 @@ final class VLCOriginHTTPProxy: NSObject, @unchecked Sendable {
 
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
             guard !data.isEmpty else { return }
+            proxy?.recordUpstreamBytes(Int64(data.count))
+            if isSegment {
+                receivedSegmentBytes += Int64(data.count)
+            }
             if isPlaylist {
                 guard playlistBody.count + data.count <= VLCOriginHTTPProxy.maxPlaylistBytes else {
                     responseStarted = true
@@ -449,12 +967,28 @@ final class VLCOriginHTTPProxy: NSObject, @unchecked Sendable {
                         return
                     }
                     let body = try rewritePlaylist(playlistBody, baseURL: base)
+                    if let text = String(data: playlistBody, encoding: .utf8) {
+                        proxy?.updateActiveTimeline(manifestText: text, manifestURL: base)
+                    }
                     responseStarted = true
                     sendStatus(200, headers: [("Content-Type", "application/vnd.apple.mpegurl"),
                                                ("Content-Length", String(body.count))], body: body, final: true)
                 } catch {
                     responseStarted = true
                     sendStatus(502, headers: [("Content-Length", "0")], body: nil, final: true)
+                }
+            }
+            if error == nil && isSegment && !cancelled {
+                let status = segmentStatusCode ?? 0
+                let isValid = VLCOriginHTTPProxy.isSegmentCompletionValid(
+                    requestedRange: currentRangeHeader,
+                    statusCode: status,
+                    contentRange: segmentContentRange,
+                    contentLength: expectedSegmentLength,
+                    receivedBytes: receivedSegmentBytes
+                )
+                if isValid, let target = currentTargetURL {
+                    proxy?.recordCompletedSegment(url: target, byteRange: currentRangeHeader)
                 }
             }
             if error != nil && !responseStarted {

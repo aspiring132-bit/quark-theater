@@ -747,6 +747,343 @@ final class CodexUpdateTests: XCTestCase {
         XCTAssertEqual(StoragePaths.mediaCatalogDatabaseURL()?.lastPathComponent, "media-catalog.sqlite")
         XCTAssertEqual(StoragePaths.watchHistoryDatabaseURL()?.lastPathComponent, "watch-history.sqlite")
     }
+
+    // MARK: - 7. EpisodeResumeResolver & Safe Diagnostics Tests
+    func testEpisodeResumeResolverSelectsMostRecentUncompletedEpisode() {
+        let ep1File = CloudFile(fileId: "f1", parentId: "0", name: "S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep5File = CloudFile(fileId: "f5", parentId: "0", name: "S01E05.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let item1 = MediaItem(id: "f1", fileId: "f1", mediaType: .series, title: "Test", year: 2024, tmdbId: 1, posterPath: nil, backdropPath: nil, overview: nil, duration: nil, matchConfidence: 1, rating: nil, genreIDs: [], sourceType: .quark, seasonNumber: 1, episodeNumber: 1)
+        let item5 = MediaItem(id: "f5", fileId: "f5", mediaType: .series, title: "Test", year: 2024, tmdbId: 1, posterPath: nil, backdropPath: nil, overview: nil, duration: nil, matchConfidence: 1, rating: nil, genreIDs: [], sourceType: .quark, seasonNumber: 1, episodeNumber: 5)
+        let parsed1 = ParsedMediaName(title: "Test", year: 2024, mediaType: .series, seasonNumber: 1, episodeNumber: 1)
+        let parsed5 = ParsedMediaName(title: "Test", year: 2024, mediaType: .series, seasonNumber: 1, episodeNumber: 5)
+        let episodes = [(item1, ep1File, parsed1), (item5, ep5File, parsed5)]
+
+        let date1 = Date(timeIntervalSince1970: 1000)
+        let date5 = Date(timeIntervalSince1970: 5000)
+        let history1 = WatchHistory(accountId: "acc", fileId: "f1", fileName: "S01E01.mp4", positionSeconds: 10, durationSeconds: 1000, lastWatchedAt: date1, completed: false)
+        let history5 = WatchHistory(accountId: "acc", fileId: "f5", fileName: "S01E05.mp4", positionSeconds: 500, durationSeconds: 1000, lastWatchedAt: date5, completed: false)
+        let historyByFileID = ["f1": history1, "f5": history5]
+
+        let resolved = EpisodeResumeResolver.resolve(episodes: episodes, historyByFileID: historyByFileID, isSeries: true)
+        XCTAssertEqual(resolved?.1.fileId, "f5", "Should pick S1E5 because its lastWatchedAt is newer, even though S1E1 also has incomplete progress")
+    }
+
+    func testEpisodeResumeResolverAdvancesToSubsequentEpisodeWhenLatestIsCompleted() {
+        let ep1File = CloudFile(fileId: "f1", parentId: "0", name: "S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep2File = CloudFile(fileId: "f2", parentId: "0", name: "S01E02.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let item1 = MediaItem(id: "f1", fileId: "f1", mediaType: .series, title: "Test", year: 2024, tmdbId: 1, posterPath: nil, backdropPath: nil, overview: nil, duration: nil, matchConfidence: 1, rating: nil, genreIDs: [], sourceType: .quark, seasonNumber: 1, episodeNumber: 1)
+        let item2 = MediaItem(id: "f2", fileId: "f2", mediaType: .series, title: "Test", year: 2024, tmdbId: 1, posterPath: nil, backdropPath: nil, overview: nil, duration: nil, matchConfidence: 1, rating: nil, genreIDs: [], sourceType: .quark, seasonNumber: 1, episodeNumber: 2)
+        let parsed1 = ParsedMediaName(title: "Test", year: 2024, mediaType: .series, seasonNumber: 1, episodeNumber: 1)
+        let parsed2 = ParsedMediaName(title: "Test", year: 2024, mediaType: .series, seasonNumber: 1, episodeNumber: 2)
+        let episodes = [(item1, ep1File, parsed1), (item2, ep2File, parsed2)]
+
+        let history1 = WatchHistory(accountId: "acc", fileId: "f1", fileName: "S01E01.mp4", positionSeconds: 980, durationSeconds: 1000, lastWatchedAt: Date(), completed: true)
+        let historyByFileID = ["f1": history1]
+
+        let resolved = EpisodeResumeResolver.resolve(episodes: episodes, historyByFileID: historyByFileID, isSeries: true)
+        XCTAssertEqual(resolved?.1.fileId, "f2", "When latest watched episode is completed, should advance to subsequent episode (S1E2)")
+    }
+
+    func testEpisodeResumeResolverFallsBackToFirstEpisodeWhenNoHistory() {
+        let ep1File = CloudFile(fileId: "f1", parentId: "0", name: "S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let item1 = MediaItem(id: "f1", fileId: "f1", mediaType: .series, title: "Test", year: 2024, tmdbId: 1, posterPath: nil, backdropPath: nil, overview: nil, duration: nil, matchConfidence: 1, rating: nil, genreIDs: [], sourceType: .quark, seasonNumber: 1, episodeNumber: 1)
+        let parsed1 = ParsedMediaName(title: "Test", year: 2024, mediaType: .series, seasonNumber: 1, episodeNumber: 1)
+        let episodes = [(item1, ep1File, parsed1)]
+
+        let resolved = EpisodeResumeResolver.resolve(episodes: episodes, historyByFileID: [:], isSeries: true)
+        XCTAssertEqual(resolved?.1.fileId, "f1")
+    }
+
+    func testEpisodeResumeResolverReturnsLastEpisodeWhenLatestWatchedIsLastEpisodeAndCompleted() {
+        let ep1File = CloudFile(fileId: "f1", parentId: "0", name: "S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep2File = CloudFile(fileId: "f2", parentId: "0", name: "S01E02.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep3File = CloudFile(fileId: "f3", parentId: "0", name: "S01E03.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let item1 = MediaItem(id: "f1", fileId: "f1", mediaType: .series, title: "Test", year: 2024, tmdbId: 1, posterPath: nil, backdropPath: nil, overview: nil, duration: nil, matchConfidence: 1, rating: nil, genreIDs: [], sourceType: .quark, seasonNumber: 1, episodeNumber: 1)
+        let item2 = MediaItem(id: "f2", fileId: "f2", mediaType: .series, title: "Test", year: 2024, tmdbId: 1, posterPath: nil, backdropPath: nil, overview: nil, duration: nil, matchConfidence: 1, rating: nil, genreIDs: [], sourceType: .quark, seasonNumber: 1, episodeNumber: 2)
+        let item3 = MediaItem(id: "f3", fileId: "f3", mediaType: .series, title: "Test", year: 2024, tmdbId: 1, posterPath: nil, backdropPath: nil, overview: nil, duration: nil, matchConfidence: 1, rating: nil, genreIDs: [], sourceType: .quark, seasonNumber: 1, episodeNumber: 3)
+        let parsed1 = ParsedMediaName(title: "Test", year: 2024, mediaType: .series, seasonNumber: 1, episodeNumber: 1)
+        let parsed2 = ParsedMediaName(title: "Test", year: 2024, mediaType: .series, seasonNumber: 1, episodeNumber: 2)
+        let parsed3 = ParsedMediaName(title: "Test", year: 2024, mediaType: .series, seasonNumber: 1, episodeNumber: 3)
+        let episodes = [(item1, ep1File, parsed1), (item2, ep2File, parsed2), (item3, ep3File, parsed3)]
+
+        let history3 = WatchHistory(accountId: "acc", fileId: "f3", fileName: "S01E03.mp4", positionSeconds: 1000, durationSeconds: 1000, lastWatchedAt: Date(), completed: true)
+        let historyByFileID = ["f3": history3]
+
+        let resolved = EpisodeResumeResolver.resolve(episodes: episodes, historyByFileID: historyByFileID, isSeries: true)
+        XCTAssertEqual(resolved?.1.fileId, "f3", "When latest watched episode is the final episode and completed, must stay on the final episode as conservative fallback and not jump back to S1E1")
+    }
+
+    func testEpisodeSelectionAndPlaybackStartedShareCorrelationIDAndDoNotLeakSecrets() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quark-coordinator-diag-\(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
+        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
+        let engine = StubPlaybackEngine()
+        let stubClient = EpisodeSwitchStubClient()
+
+        let ep5 = CloudFile(fileId: "ep5", parentId: "show", name: "Show.S01E05.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let coordinator = PlaybackCoordinator(
+            client: stubClient,
+            accountID: "account-1",
+            file: ep5,
+            queue: [ep5],
+            history: history,
+            diagnostics: diagnostics,
+            engine: engine
+        )
+
+        let startTask = Task { await coordinator.start() }
+        for _ in 0..<20 {
+            if stubClient.requestedFileIDs.contains("ep5") { break }
+            await Task.yield()
+        }
+
+        // 1. Verify lastRequestedPlaybackFileID records the requested fileId
+        XCTAssertEqual(coordinator.lastRequestedPlaybackFileID, "ep5")
+
+        // 2. Supply resource and let start complete
+        let resource = PlaybackResource(
+            fileID: "ep5",
+            url: URL(string: "https://pan.quark.cn/stream/ep5.mp4?token=secret123&cookie=auth456")!,
+            cookies: [],
+            requiredHTTPHeaders: [:],
+            expiresAt: nil
+        )
+        stubClient.resumeContinuation(for: "ep5", with: .success(resource))
+        _ = await startTask.value
+
+        // 3. Engine fires ready event to begin playback
+        let snap = PlaybackSnapshot(
+            generation: 1,
+            state: .playing,
+            currentTime: 0,
+            duration: 100,
+            bufferedTime: 10,
+            networkRate: 1024,
+            hasVideoOutput: true,
+            bufferedRanges: []
+        )
+        engine.eventHandler?(.ready(snap))
+        await diagnostics.waitForPendingOperations()
+
+        // 4. Verify linkage: episodeSelectionRequested and started share the exact same correlationID
+        let selectionRecord = try XCTUnwrap(diagnostics.records.first { $0.event == .episodeSelectionRequested })
+        let startedRecord = try XCTUnwrap(diagnostics.records.first { $0.event == .started })
+
+        XCTAssertNotNil(selectionRecord.correlationID)
+        XCTAssertEqual(selectionRecord.correlationID, startedRecord.correlationID, "episodeSelectionRequested and playback started MUST share the same correlation ID")
+
+        // 5. Verify no sensitive URLs, tokens or cookies leaked in diagnostic records
+        for record in [selectionRecord, startedRecord] {
+            for (key, val) in record.metadata {
+                let str = String(describing: val)
+                XCTAssertFalse(str.contains("secret123"), "Diagnostic metadata \(key) must not leak tokens")
+                XCTAssertFalse(str.contains("auth456"), "Diagnostic metadata \(key) must not leak cookies")
+                XCTAssertFalse(str.contains("pan.quark.cn"), "Diagnostic metadata \(key) must not leak streaming URLs")
+            }
+        }
+    }
+
+    // MARK: - 8. Speed & Hint Pill Policy Tests
+    func testNetworkSpeedPolicyDoesNotClearSpeedOnBufferingOrLoading() {
+        let engine = StubPlaybackEngine()
+        let tempHistoryURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test-history-\(UUID()).sqlite")
+        let history = try! HistoryRepository(url: tempHistoryURL)
+        let coordinator = PlaybackCoordinator(
+            client: EpisodeSwitchStubClient(),
+            accountID: "acc-1",
+            file: CloudFile(fileId: "f1", parentId: "0", name: "v.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false),
+            history: history,
+            diagnostics: Diagnostics(),
+            engine: engine
+        )
+
+        // Simulate real speed arriving via snapshot
+        let snapWithSpeed = PlaybackSnapshot(
+            generation: 1,
+            state: .playing,
+            currentTime: 10,
+            duration: 100,
+            bufferedTime: 20,
+            networkRate: 2_097_152, // 2 MB/s
+            hasVideoOutput: true,
+            bufferedRanges: []
+        )
+        engine.eventHandler?(.stateChanged(snapWithSpeed))
+        // Verify speed was recorded or formatted
+        XCTAssertEqual(coordinator.networkSpeedText, "2.0 MB/s")
+
+        // Diagnostic event with buffering state MUST NOT clear existing real speed
+        let diagSnap = PlaybackDiagnosticSnapshot(
+            generation: 1,
+            mediaIdentifier: "test",
+            state: .buffering,
+            hasVideoOutput: true,
+            decodedAudioBuffers: 0,
+            lostAudioBuffers: 0,
+            decodedVideoFrames: 0,
+            lostVideoFrames: 0
+        )
+        engine.eventHandler?(.diagnostic(diagSnap))
+        XCTAssertEqual(coordinator.networkSpeedText, "2.0 MB/s", "Buffering diagnostic must not clear previously sampled real network speed")
+
+        // Zero or non-positive networkRate resets networkSpeedText to avoid displaying stale speed samples
+        let snapWithoutSpeed = PlaybackSnapshot(
+            generation: 1,
+            state: .playing,
+            currentTime: 12,
+            duration: 100,
+            bufferedTime: 20,
+            networkRate: 0,
+            hasVideoOutput: true,
+            bufferedRanges: []
+        )
+        engine.eventHandler?(.stateChanged(snapWithoutSpeed))
+        XCTAssertEqual(coordinator.networkSpeedText, "", "Zero networkRate must clear stale speed text")
+    }
+
+    func testPlayerScreenHintDismissDurationIsThreeSeconds() {
+        XCTAssertEqual(PlayerScreen.hintDismissDurationSeconds, 3.0)
+    }
+
+    // MARK: - 9. HUD, Scrubber & Throughput Policy Tests
+    func testPlayerTimeFormatterDurationAndCurrentTimeWhenUnknown() {
+        // When duration is unknown (<= 0), formatDuration must return "--:--"
+        XCTAssertEqual(PlayerTimeFormatter.formatDuration(0), "--:--")
+        XCTAssertEqual(PlayerTimeFormatter.formatDuration(-1), "--:--")
+        XCTAssertEqual(PlayerTimeFormatter.formatDuration(.nan), "--:--")
+
+        // When duration is unknown and current time is 0, formatCurrentTime must return "--:--"
+        XCTAssertEqual(PlayerTimeFormatter.formatCurrentTime(0, duration: 0), "--:--")
+        XCTAssertEqual(PlayerTimeFormatter.formatCurrentTime(0, duration: -1), "--:--")
+
+        // Established times
+        XCTAssertEqual(PlayerTimeFormatter.formatDuration(125), "02:05")
+        XCTAssertEqual(PlayerTimeFormatter.formatDuration(3665), "01:01:05")
+        XCTAssertEqual(PlayerTimeFormatter.formatCurrentTime(15, duration: 125), "00:15")
+        XCTAssertEqual(PlayerTimeFormatter.formatCurrentTime(3600, duration: 3665), "01:00:00")
+
+        // Diff formatting
+        XCTAssertEqual(PlayerTimeFormatter.formatTargetDiff(pending: 20, current: 0), "+20s")
+        XCTAssertEqual(PlayerTimeFormatter.formatTargetDiff(pending: 10, current: 25), "-15s")
+        XCTAssertEqual(PlayerTimeFormatter.formatTargetDiff(pending: 10, current: 10), "+0s")
+    }
+
+    func testPlayerScrubberGeometryPolicyDurationZeroDoesNotMapTargetToOneHundredPercent() {
+        // When duration <= 0, targetFraction must NOT clamp to 1.0 (100%)
+        let zeroDurationTarget = PlayerScrubberGeometryPolicy.targetFraction(target: 20, duration: 0)
+        XCTAssertNil(zeroDurationTarget, "When duration <= 0, targetFraction must be nil so target is not mapped to 100%")
+
+        let zeroDurationPlayed = PlayerScrubberGeometryPolicy.playedFraction(current: 20, duration: 0)
+        XCTAssertEqual(zeroDurationPlayed, 0, "Played fraction must be 0 when duration is 0")
+
+        let zeroDurationBuffers = PlayerScrubberGeometryPolicy.bufferedFractions(
+            ranges: [PlaybackTimeRange(start: 0, end: 10)],
+            duration: 0
+        )
+        XCTAssertTrue(zeroDurationBuffers.isEmpty)
+
+        // With valid duration
+        let validTarget = PlayerScrubberGeometryPolicy.targetFraction(target: 50, duration: 100)
+        XCTAssertEqual(validTarget, 0.5)
+
+        let validPlayed = PlayerScrubberGeometryPolicy.playedFraction(current: 25, duration: 100)
+        XCTAssertEqual(validPlayed, 0.25)
+
+        let validBuffers = PlayerScrubberGeometryPolicy.bufferedFractions(
+            ranges: [PlaybackTimeRange(start: 0, end: 30), PlaybackTimeRange(start: 60, end: 80)],
+            duration: 100
+        )
+        XCTAssertEqual(validBuffers.count, 2)
+        XCTAssertEqual(validBuffers[0], ScrubberSegment(startFraction: 0.0, endFraction: 0.3))
+        XCTAssertEqual(validBuffers[1], ScrubberSegment(startFraction: 0.6, endFraction: 0.8))
+    }
+
+    func testPlayerSpeedBadgePolicyFormatting() {
+        // Buffering without sample must never say "暂无数据"
+        let bufferingNoSpeed = PlayerSpeedBadgePolicy.badgeText(isBuffering: true, isLoading: false, isSeeking: false, speedText: "")
+        XCTAssertEqual(bufferingNoSpeed, "缓冲中…")
+        XCTAssertFalse(bufferingNoSpeed?.contains("暂无数据") == true)
+
+        let bufferingWithSpeed = PlayerSpeedBadgePolicy.badgeText(isBuffering: true, isLoading: false, isSeeking: false, speedText: "2.4 MB/s")
+        XCTAssertEqual(bufferingWithSpeed, "缓冲中 · 2.4 MB/s")
+
+        // Loading without sample
+        let loadingNoSpeed = PlayerSpeedBadgePolicy.badgeText(isBuffering: false, isLoading: true, isSeeking: false, speedText: "")
+        XCTAssertEqual(loadingNoSpeed, "正在加载…")
+        XCTAssertFalse(loadingNoSpeed?.contains("暂无数据") == true)
+
+        let loadingWithSpeed = PlayerSpeedBadgePolicy.badgeText(isBuffering: false, isLoading: true, isSeeking: false, speedText: "1.2 MB/s")
+        XCTAssertEqual(loadingWithSpeed, "正在加载 · 1.2 MB/s")
+
+        // Seek-only without sample: must display "正在跳转…", never "暂无数据"
+        let seekOnlyNoSpeed = PlayerSpeedBadgePolicy.badgeText(isBuffering: false, isLoading: false, isSeeking: true, speedText: "")
+        XCTAssertEqual(seekOnlyNoSpeed, "正在跳转…")
+        XCTAssertFalse(seekOnlyNoSpeed?.contains("暂无数据") == true)
+
+        // Seek-only with sample: displays speed
+        let seekOnlyWithSpeed = PlayerSpeedBadgePolicy.badgeText(isBuffering: false, isLoading: false, isSeeking: true, speedText: "3.5 MB/s")
+        XCTAssertEqual(seekOnlyWithSpeed, "3.5 MB/s")
+
+        // Idle / Normal playback (not buffering, not loading, not seeking): badge MUST be hidden (nil)
+        let idleNoSpeed = PlayerSpeedBadgePolicy.badgeText(isBuffering: false, isLoading: false, isSeeking: false, speedText: "")
+        XCTAssertNil(idleNoSpeed, "Badge must not be shown during idle/normal playback without speed")
+
+        let idleWithSpeed = PlayerSpeedBadgePolicy.badgeText(isBuffering: false, isLoading: false, isSeeking: false, speedText: "1.2 MB/s")
+        XCTAssertNil(idleWithSpeed, "Badge must not be shown during idle/normal playback even if speed is present")
+    }
+
+    func testProxyNetworkThroughputTrackerSamplesThroughput() {
+        let tracker = VLCOriginHTTPProxy.NetworkThroughputTracker(windowSeconds: 2.0)
+        let t0 = Date()
+        let t1 = t0.addingTimeInterval(0.5)
+
+        tracker.record(bytes: 500_000, at: t0)
+        tracker.record(bytes: 500_000, at: t1)
+
+        let rate = tracker.currentBytesPerSecond(at: t1)
+        XCTAssertNotNil(rate)
+        if let rate {
+            // 1,000,000 bytes over 0.5s = ~2,000,000 bytes/sec
+            XCTAssertEqual(rate, 2_000_000, accuracy: 1.0)
+        }
+    }
+
+    func testProxyVODTimelineCalculatesTotalDuration() {
+        let manifest = """
+        #EXTM3U
+        #EXT-X-VERSION:3
+        #EXT-X-TARGETDURATION:10
+        #EXT-X-PLAYLIST-TYPE:VOD
+        #EXTINF:9.009,
+        segment1.ts
+        #EXTINF:8.5,
+        segment2.ts
+        #EXT-X-ENDLIST
+        """
+        let url = URL(string: "https://example.com/vod.m3u8")!
+        let timeline = VLCOriginHTTPProxy.parseVODTimeline(manifestText: manifest, manifestURL: url)
+        XCTAssertNotNil(timeline)
+        XCTAssertEqual(timeline?.totalDuration ?? 0, 17.509, accuracy: 0.001)
+        XCTAssertEqual(timeline?.segments.count, 2)
+    }
+}
+
+@MainActor
+private final class StubPlaybackEngine: PlaybackEngine {
+    var eventHandler: ((PlaybackEngineEvent) -> Void)?
+    var snapshot: PlaybackSnapshot = .idle()
+    var audioTracks: [PlaybackTrack] = []
+    var subtitleTracks: [PlaybackTrack] = []
+
+    func attachSurface(_ surface: UIView?) {}
+    func load(_ resource: PlaybackResource, generation: Int) {}
+    func play() {}
+    func pause() {}
+    func stop() {}
+    func seek(to seconds: TimeInterval) {}
+    func selectAudioTrack(id: Int?) {}
+    func selectSubtitleTrack(id: Int?) {}
 }
 
 @MainActor

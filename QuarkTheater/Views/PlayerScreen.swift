@@ -6,16 +6,17 @@ struct PlayerScreen: View {
     @StateObject private var coordinator: PlaybackCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
+    static let hintDismissDurationSeconds: Double = 3.0
     @State private var showDrawer = false
     @State private var showHintPill = true
+    @State private var lastDrawerCloseTime: Date?
     @State private var selectedDrawerTab: DrawerTab = .episodes
     @State private var isSeeking = false
     @State private var pendingSeekTarget: Double?
     @State private var seekCommitTask: Task<Void, Never>?
     @State private var seekDismissTask: Task<Void, Never>?
-    @State private var seekRepeatCount = 0
-    @State private var lastSeekDirection: PlayerSeekDirection?
-    @State private var lastSeekDate: Date?
+    @State private var seekState = PlayerRemoteSeekState()
+    @State private var seekMultiplier = 1
     @State private var seekLastInteractionDate: Date?
     @State private var lastBackDate: Date?
     @State private var hintDismissTask: Task<Void, Never>?
@@ -89,6 +90,7 @@ struct PlayerScreen: View {
                     }
                     .padding(24)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .transition(.opacity)
                 }
             } else if coordinator.isLoading {
@@ -100,6 +102,7 @@ struct PlayerScreen: View {
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
                 VStack(spacing: 24) {
                     Image(systemName: "play.slash")
@@ -120,6 +123,7 @@ struct PlayerScreen: View {
                             .buttonStyle(.bordered)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
 
             // 2. Bottom Drawer Trigger Pill (auto fades after 3s)
@@ -140,10 +144,11 @@ struct PlayerScreen: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .opacity(showHintPill ? 1 : 0.001)
+                    .background(Capsule().fill(showHintPill ? Color.white.opacity(0.15) : Color.clear))
+                    .opacity(showHintPill ? 1 : 0)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DrawerTriggerButtonStyle())
+                .focusEffectDisabled(true)
                 .focused($focusedTarget, equals: .drawerTrigger)
                 .accessibilityIdentifier("player.drawerTrigger")
                 // Keep the trigger focusable in the focus tree after the hint fades so
@@ -160,18 +165,20 @@ struct PlayerScreen: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            // Adaptive Network Speed Badge: appears only during real buffering or loading (BUG-005)
-            if (coordinator.isBuffering || coordinator.isLoading) {
+            // Adaptive Network Speed Badge: appears only during real buffering, loading, or seeking (BUG-005)
+            if coordinator.isBuffering || coordinator.isLoading || isSeeking {
                 speedBadgeView
                     .padding(.top, 40)
                     .padding(.trailing, 60)
                     .transition(.opacity.combined(with: .scale(scale: 0.92)))
             }
+        }
+        .overlay(alignment: .top) {
             if isSeeking {
                 seekHUDView
                     .padding(.top, 92)
-                    .padding(.trailing, 60)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .padding(.horizontal, 60)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -235,8 +242,8 @@ struct PlayerScreen: View {
             if focusedTarget == nil {
                 focusedTarget = .drawerTrigger
             }
-            await coordinator.start()
             restartHintDismissTimer()
+            await coordinator.start()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { coordinator.saveProgress() }
@@ -308,24 +315,24 @@ struct PlayerScreen: View {
                 }
             }
         case .seek(let dir, let interval):
-            // BUG-004/BUG-007/F-002:
-            // 1. Short press uses configured interval (10/15s)
-            // 2. Accumulate from previous pending seek target or current playback time
-            // 3. Continuous press / hold accelerates step (1x, 2x, 3x, 4x)
-            // 4. Avoid double triggering; commit seek target upon release
-            let now = Date()
-            let isRepeat = lastSeekDirection == dir && (lastSeekDate.map { now.timeIntervalSince($0) < 0.45 } ?? false)
-            seekRepeatCount = isRepeat ? min(seekRepeatCount + 1, 4) : 0
-            lastSeekDirection = dir
-            lastSeekDate = now
+            // Deterministic remote seek reducer:
+            // 1. First move uses base configured interval (10/15s) with 1x multiplier.
+            // 2. Continuous repeated events from remote hold accelerate across 1x, 2x, 4x, 8x tiers.
+            // 3. Multiplier applies per actual remote repeat event, never from timer ticks.
+            // 4. Clamps within [0, duration] and commits once after bounded idle timeout (0.45s).
+            let now = Date().timeIntervalSinceReferenceDate
+            let result = PlayerRemoteSeekReducer.handle(
+                state: &seekState,
+                event: .playerMove(direction: dir, timestamp: now),
+                playbackTime: coordinator.playbackTime,
+                duration: coordinator.playbackDuration,
+                configuredInterval: interval
+            )
 
-            let effectiveInterval = PlayerSeekRepeatPolicy.interval(configured: interval, repeatCount: seekRepeatCount)
-            let baseTime = pendingSeekTarget ?? coordinator.playbackTime
-            let duration = coordinator.playbackDuration
-
-            if let nextTarget = PlayerSeekMath.target(current: baseTime, direction: dir, interval: effectiveInterval, duration: duration) {
+            if let nextTarget = result.pendingTarget {
                 pendingSeekTarget = nextTarget
             }
+            seekMultiplier = result.multiplier
 
             triggerSeeking()
 
@@ -333,7 +340,15 @@ struct PlayerScreen: View {
             seekCommitTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 450_000_000)
                 guard !Task.isCancelled else { return }
-                if let target = pendingSeekTarget {
+                let timeoutNow = Date().timeIntervalSinceReferenceDate
+                let timeoutResult = PlayerRemoteSeekReducer.handle(
+                    state: &seekState,
+                    event: .idleTimeout(timestamp: timeoutNow),
+                    playbackTime: coordinator.playbackTime,
+                    duration: coordinator.playbackDuration,
+                    configuredInterval: interval
+                )
+                if timeoutResult.shouldCommit, let target = timeoutResult.commitTarget {
                     coordinator.seek(to: target)
                 }
             }
@@ -380,6 +395,10 @@ struct PlayerScreen: View {
             focusedTarget = selectedDrawerTab == .episodes
                 ? .episode(currentID)
                 : .drawerTab(selectedDrawerTab.rawValue)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            guard showDrawer, selectedDrawerTab == .episodes else { return }
+            focusedTarget = .episode(currentID)
         }
     }
 
@@ -438,6 +457,7 @@ struct PlayerScreen: View {
 
     private func closeDrawer() {
         hintDismissTask?.cancel()
+        lastDrawerCloseTime = Date()
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             showDrawer = false
             showHintPill = true
@@ -458,7 +478,6 @@ struct PlayerScreen: View {
         lastBackDate = now
 
         let drawerWasOpen = showDrawer
-        let action = PlayerInputReducer.handleBack(state: currentInputState)
         var metadata: [DiagnosticMetadata] = [
             .backDisposition(drawerWasOpen ? .closedDrawer : .dismissedPlayer)
         ]
@@ -478,15 +497,19 @@ struct PlayerScreen: View {
         )
         if drawerWasOpen {
             closeDrawer()
-        } else {
-            dismiss()
+            return
         }
+        if let closeTime = lastDrawerCloseTime, now.timeIntervalSince(closeTime) < 0.45 {
+            // Absorb back command during or right after drawer close animation to avoid accidental dismissal
+            return
+        }
+        dismiss()
     }
 
     private func restartHintDismissTimer() {
         hintDismissTask?.cancel()
         hintDismissTask = Task {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(Self.hintDismissDurationSeconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.6)) { showHintPill = false }
         }
@@ -685,16 +708,19 @@ struct PlayerScreen: View {
                     }
                 }
                 .padding(.horizontal, 64)
-                // The focused card scales to 1.05. Keep a tall viewport plus
-                // breathing room so its top episode/playing badges stay clear
-                // of the ScrollView's clipping bounds.
-                .padding(.vertical, 24)
+                // The focused card scales to 1.05. Keep generous breathing room so
+                // its top episode/playing badges stay clear of the ScrollView's clipping bounds.
+                .padding(.vertical, 36)
             }
-            .frame(height: 280)
+            .frame(height: 310)
             .accessibilityIdentifier("player.episodeScroll")
             .onAppear {
                 let targetID = coordinator.activePlayingFileID ?? coordinator.currentPlayingFile.fileId
                 proxy.scrollTo(PlayerFocusTarget.episode(targetID), anchor: .center)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    guard showDrawer, selectedDrawerTab == .episodes else { return }
+                    focusedTarget = .episode(targetID)
+                }
             }
             .onChange(of: focusedTarget) { _, target in
                 guard let target else { return }
@@ -802,29 +828,16 @@ struct PlayerScreen: View {
     // MARK: - Audio Content Row
     @ViewBuilder
     private var audioView: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
-                Button {
-                    coordinator.markSilent()
-                } label: {
-                    Label("声音异常", systemImage: "speaker.slash.fill")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(focusedTarget == .silentMarker ? Color.black : BrandPalette.glassWhite)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 16)
-                        .background(focusedTarget == .silentMarker ? Color.white : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(BrandPalette.iceBlue.opacity(0.45), lineWidth: 1.5))
-                }
-                .buttonStyle(.plain)
-                .focused($focusedTarget, equals: .silentMarker)
-                .accessibilityIdentifier("player.silentMarker")
-
-                let names = coordinator.audioTrackNames
-                if names.isEmpty {
-                    Text("当前使用系统默认立体声音频流。")
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 24)
-                } else {
+        let names = coordinator.audioTrackNames
+        if names.isEmpty {
+            Text("无可用音轨")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 44)
+                .padding(.vertical, 24)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
                     ForEach(names.indices, id: \.self) { index in
                         let isSelected = coordinator.selectedAudioIndex == index
                         let isFocused = focusedTarget == .audio(String(index))
@@ -841,9 +854,9 @@ struct PlayerScreen: View {
                         .focused($focusedTarget, equals: .audio(String(index)))
                     }
                 }
+                .padding(.horizontal, 44)
+                .padding(.vertical, 16)
             }
-            .padding(.horizontal, 44)
-            .padding(.vertical, 16)
         }
     }
 
@@ -921,31 +934,31 @@ struct PlayerScreen: View {
     @ViewBuilder
     private var speedBadgeView: some View {
         let speed = coordinator.networkSpeedText
-        HStack(spacing: 8) {
-            Image(systemName: "bolt.horizontal.fill")
-                .foregroundStyle(BrandPalette.glassWhite)
-            if coordinator.isBuffering {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .scaleEffect(0.6)
-                Text(speed.isEmpty ? "正在缓冲…" : "缓冲中 · \(speed)")
-                    .font(.caption.bold())
-            } else if coordinator.isLoading {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .scaleEffect(0.6)
-                Text("正在加载…")
-                    .font(.caption.bold())
-            } else {
-                Text(speed.isEmpty ? "夸克高速专线" : speed)
+        let text = PlayerSpeedBadgePolicy.badgeText(
+            isBuffering: coordinator.isBuffering,
+            isLoading: coordinator.isLoading,
+            isSeeking: isSeeking,
+            speedText: speed
+        )
+
+        if let text {
+            HStack(spacing: 8) {
+                Image(systemName: "bolt.horizontal.fill")
+                    .foregroundStyle(BrandPalette.glassWhite)
+                if coordinator.isBuffering || coordinator.isLoading {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .scaleEffect(0.6)
+                }
+                Text(text)
                     .font(.caption.bold())
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.4), radius: 8, x: 0, y: 4)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.4), radius: 8, x: 0, y: 4)
     }
 
     @ViewBuilder
@@ -956,109 +969,120 @@ struct PlayerScreen: View {
         let bufferedTime = coordinator.bufferedTime
         let bufferedRanges = coordinator.bufferedRanges
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header Row: Left seek target/diff/multiplier, Right played & total duration
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if let pending = pendingSeekTarget {
-                        let diff = pending - current
-                        let diffStr = diff >= 0 ? "+\(Int(diff.rounded()))s" : "\(Int(diff.rounded()))s"
-                        HStack(spacing: 6) {
-                            Text("跳转目标: \(formatTime(pending))")
-                                .font(.headline.weight(.bold).monospacedDigit())
-                                .foregroundStyle(BrandPalette.iceBlue)
-                            Text("(\(diffStr))")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(BrandPalette.iceBlue.opacity(0.85))
+                if let pending = pendingSeekTarget {
+                    let diffStr = PlayerTimeFormatter.formatTargetDiff(pending: pending, current: current)
+                    HStack(spacing: 8) {
+                        Text("跳转目标: \(PlayerTimeFormatter.formatPlaybackTime(pending, duration: duration))")
+                            .font(.headline.weight(.bold).monospacedDigit())
+                            .foregroundStyle(BrandPalette.iceBlue)
+                        Text("(\(diffStr))")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(BrandPalette.iceBlue.opacity(0.85))
+                        if seekMultiplier > 1 {
+                            Text("\(seekMultiplier)x")
+                                .font(.caption2.weight(.bold).monospacedDigit())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(BrandPalette.iceBlue.opacity(0.8)))
                         }
                     }
-                    HStack(spacing: 6) {
-                        Text("已播放: \(formatTime(current))")
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.white)
-                        Text("/ 总时长: \(formatTime(duration))")
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
                 }
-                Spacer(minLength: 16)
-                if bufferedTime > 0 {
-                    Text("已缓冲: \(formatTime(bufferedTime))")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(Color.white.opacity(0.75))
+
+                Spacer(minLength: 24)
+
+                HStack(spacing: 6) {
+                    Text("已播放: \(PlayerTimeFormatter.formatCurrentTime(current, duration: duration))")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.white)
+                    Text("/ 总时长: \(PlayerTimeFormatter.formatDuration(duration))")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
             }
 
-            // Scrubber Bar with Buffered Ranges and Seek Target
+            // Scrubber Bar with 3 distinctly styled layers (adapts to full content width)
             GeometryReader { geo in
                 let width = geo.size.width
-                let total = max(duration, 1)
+                let playedFraction = PlayerScrubberGeometryPolicy.playedFraction(current: current, duration: duration)
+                let targetFrac = PlayerScrubberGeometryPolicy.targetFraction(target: pendingSeekTarget, duration: duration)
+                let bufferSegments = PlayerScrubberGeometryPolicy.bufferedFractions(ranges: bufferedRanges, duration: duration)
 
                 ZStack(alignment: .leading) {
-                    // Track Background
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white.opacity(0.2))
-                        .frame(height: 6)
+                    // Layer 1: Remainder / Total duration track (Deep dark slate with subtle rim)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color(white: 0.20))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+                        )
+                        .frame(height: 8)
 
-                    // Buffered ranges (multi-range when available)
-                    if !bufferedRanges.isEmpty {
-                        ForEach(Array(bufferedRanges.enumerated()), id: \.offset) { _, range in
-                            let startFraction = min(max(range.start / total, 0), 1)
-                            let endFraction = min(max(range.end / total, 0), 1)
-                            let rangeWidth = max(0, (endFraction - startFraction) * width)
-                            let offset = startFraction * width
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Color.white.opacity(0.45))
-                                .frame(width: rangeWidth, height: 6)
+                    // Layer 2: Buffered Ranges (HLS segments - Cool Cyan/Ice-Blue)
+                    if !bufferSegments.isEmpty {
+                        ForEach(Array(bufferSegments.enumerated()), id: \.offset) { _, seg in
+                            let rangeWidth = max(2, (seg.endFraction - seg.startFraction) * width)
+                            let offset = seg.startFraction * width
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color(red: 0.35, green: 0.75, blue: 0.95).opacity(0.75))
+                                .frame(width: rangeWidth, height: 8)
                                 .offset(x: offset)
                         }
-                    } else if bufferedTime > 0 {
-                        let bufferFraction = min(max(bufferedTime / total, 0), 1)
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.white.opacity(0.45))
-                            .frame(width: bufferFraction * width, height: 6)
+                    } else if bufferedTime > 0, duration > 0 {
+                        let singleFrac = min(max(bufferedTime / duration, 0), 1)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(red: 0.35, green: 0.75, blue: 0.95).opacity(0.75))
+                            .frame(width: singleFrac * width, height: 8)
                     }
 
-                    // Played progress (actual playhead, never faked during buffering)
-                    let playedFraction = min(max(current / total, 0), 1)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white.opacity(0.9))
-                        .frame(width: playedFraction * width, height: 6)
+                    // Layer 3: Played progress (Solid Bright White)
+                    if playedFraction > 0 {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.white)
+                            .frame(width: playedFraction * width, height: 8)
+                    }
 
-                    // Actual playhead dot
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 12, height: 12)
-                        .offset(x: max(0, min(playedFraction * width - 6, width - 12)))
+                    // Layer 4: Playhead Dot (White circle with drop shadow)
+                    if duration > 0 {
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 14, height: 14)
+                            .shadow(color: .black.opacity(0.6), radius: 3, x: 0, y: 1)
+                            .offset(x: max(0, min(playedFraction * width - 7, width - 14)))
+                    }
 
-                    // Seek target indicator
-                    if pendingSeekTarget != nil {
-                        let targetFraction = min(max(target / total, 0), 1)
+                    // Layer 5: Seek Target Cursor (Glowing Accent Marker)
+                    if let targetFrac {
                         ZStack {
                             Capsule()
                                 .fill(BrandPalette.iceBlue)
-                                .frame(width: 4, height: 16)
+                                .frame(width: 4, height: 20)
                             Circle()
-                                .stroke(BrandPalette.iceBlue, lineWidth: 2)
+                                .stroke(BrandPalette.iceBlue, lineWidth: 2.5)
                                 .background(Circle().fill(Color.white))
                                 .frame(width: 14, height: 14)
+                                .shadow(color: BrandPalette.iceGlow, radius: 6)
                         }
-                        .offset(x: max(0, min(targetFraction * width - 7, width - 14)))
+                        .offset(x: max(0, min(targetFrac * width - 7, width - 14)))
                     }
                 }
             }
-            .frame(width: 380, height: 18)
+            .frame(height: 20)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.2), lineWidth: 1))
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.18), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 12, x: 0, y: 6)
         .accessibilityIdentifier("player.seekHUD")
     }
 
     private func formatTime(_ value: Double) -> String {
-        guard value.isFinite, value >= 0 else { return "00:00" }
-        let total = Int(value.rounded())
-        return String(format: "%02d:%02d", total / 60, total % 60)
+        PlayerTimeFormatter.formatPlaybackTime(value, duration: coordinator.playbackDuration)
     }
 
     private func triggerSeeking() {
@@ -1260,8 +1284,8 @@ private struct DrawerEpisodeCard: View {
                     .foregroundStyle(isCurrent ? BrandPalette.glassWhite : (isFocused ? BrandPalette.glassWhite : BrandPalette.secondaryText))
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
         .frame(width: 360, height: 75, alignment: .leading)
         .background(infoBackgroundColor)
     }
@@ -1323,7 +1347,16 @@ private struct DrawerEpisodeCard: View {
 
             // Top Badges
             VStack {
-                HStack {
+                HStack(spacing: 6) {
+                    if let ep = parsed.episodeNumber {
+                        Text("第 \(ep) 集")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+
                     if isCurrent {
                         HStack(spacing: 4) {
                             Circle().fill(BrandPalette.iceBlue).frame(width: 6, height: 6)
@@ -1342,13 +1375,6 @@ private struct DrawerEpisodeCard: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(.ultraThinMaterial, in: Capsule())
-                    } else if let ep = parsed.episodeNumber {
-                        Text("第 \(ep) 集")
-                            .font(.caption2.bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.ultraThinMaterial, in: Capsule())
                     }
 
                     Spacer()
@@ -1360,7 +1386,9 @@ private struct DrawerEpisodeCard: View {
                         .padding(.vertical, 2)
                         .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
                 }
-                .padding(8)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 4)
 
                 Spacer()
             }
@@ -1381,5 +1409,100 @@ private struct DrawerEpisodeCard: View {
                 .font(.system(size: 32))
                 .foregroundStyle(Color.white.opacity(0.1))
         )
+    }
+}
+
+struct DrawerTriggerButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+    }
+}
+
+enum PlayerTimeFormatter {
+    static func formatDuration(_ duration: TimeInterval) -> String {
+        guard duration.isFinite, duration > 0 else { return "--:--" }
+        let total = Int(duration.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 {
+            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%02d:%02d", minutes, seconds)
+        }
+    }
+
+    static func formatCurrentTime(_ time: TimeInterval, duration: TimeInterval) -> String {
+        guard time.isFinite, time >= 0 else { return "--:--" }
+        if duration <= 0 && time == 0 {
+            return "--:--"
+        }
+        return formatPlaybackTime(time, duration: duration)
+    }
+
+    static func formatPlaybackTime(_ time: TimeInterval, duration: TimeInterval) -> String {
+        guard time.isFinite, time >= 0 else { return "--:--" }
+        let total = Int(time.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 || duration >= 3600 {
+            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%02d:%02d", minutes, seconds)
+        }
+    }
+
+    static func formatTargetDiff(pending: TimeInterval, current: TimeInterval) -> String {
+        let diff = pending - current
+        let rounded = Int(diff.rounded())
+        return rounded >= 0 ? "+\(rounded)s" : "\(rounded)s"
+    }
+}
+
+struct ScrubberSegment: Equatable, Sendable {
+    let startFraction: Double
+    let endFraction: Double
+}
+
+enum PlayerScrubberGeometryPolicy {
+    static func playedFraction(current: TimeInterval, duration: TimeInterval) -> Double {
+        guard duration > 0, current.isFinite, current >= 0 else { return 0 }
+        return min(max(current / duration, 0), 1)
+    }
+
+    static func targetFraction(target: TimeInterval?, duration: TimeInterval) -> Double? {
+        guard let target, duration > 0, target.isFinite, target >= 0 else { return nil }
+        return min(max(target / duration, 0), 1)
+    }
+
+    static func bufferedFractions(ranges: [PlaybackTimeRange], duration: TimeInterval) -> [ScrubberSegment] {
+        guard duration > 0 else { return [] }
+        return ranges.compactMap { range in
+            let s = min(max(range.start / duration, 0), 1)
+            let e = min(max(range.end / duration, 0), 1)
+            guard e > s else { return nil }
+            return ScrubberSegment(startFraction: s, endFraction: e)
+        }
+    }
+}
+
+enum PlayerSpeedBadgePolicy {
+    static func badgeText(
+        isBuffering: Bool,
+        isLoading: Bool,
+        isSeeking: Bool = false,
+        speedText: String
+    ) -> String? {
+        if isBuffering {
+            return speedText.isEmpty ? "缓冲中…" : "缓冲中 · \(speedText)"
+        }
+        if isLoading {
+            return speedText.isEmpty ? "正在加载…" : "正在加载 · \(speedText)"
+        }
+        if isSeeking {
+            return speedText.isEmpty ? "正在跳转…" : speedText
+        }
+        return nil
     }
 }

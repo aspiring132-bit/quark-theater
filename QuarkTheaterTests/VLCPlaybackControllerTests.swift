@@ -13,7 +13,14 @@ final class VLCPlaybackControllerTests: XCTestCase {
         XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 4), .failed)
         XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 5), .playing)
         XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 6), .paused)
-        XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 7), .loading)
+        // rawValue 7 is VLCMediaPlayerStateESAdded (TVVLCKit VLCMediaPlayer.h:64)
+        XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 7), .idle)
+        XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 7, currentState: nil), .idle)
+        XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 7, currentState: .loading), .loading)
+        XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 7, currentState: .playing), .playing)
+        XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 7, currentState: .paused), .paused)
+        XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 7, currentState: .buffering), .buffering)
+        XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 7, currentState: .idle), .idle)
         XCTAssertEqual(VLCPlaybackStateMapper.map(rawValue: 99), .failed)
     }
 
