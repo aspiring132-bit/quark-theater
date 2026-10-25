@@ -177,25 +177,48 @@ final class MediaCatalogRepository {
         }
     }
 
-    func confirmed(accountID: String) throws -> [MediaItem] {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, "SELECT payload FROM media_catalog WHERE account_id=? ORDER BY file_id", -1, &statement, nil) == SQLITE_OK,
-              let statement else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
-        defer { sqlite3_finalize(statement) }
-        bind(accountID, statement, 1)
-        var items: [MediaItem] = []
-        while true {
-            let code = sqlite3_step(statement)
-            if code == SQLITE_DONE { return items }
-            guard code == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else { throw MediaCatalogError.corruptRecord }
-            let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
-            guard let item = try? JSONDecoder().decode(MediaItem.self, from: data) else { throw MediaCatalogError.corruptRecord }
-            // Filter out items whose titles are bare single numbers (e.g. "04", "01", "(09)")
-            let isBareNumber = item.title.range(of: #"^\(?\d{1,4}\)?$"#, options: .regularExpression) != nil
-            if !isBareNumber {
-                items.append(item)
+    func confirmed(accountID: String, includeAllSources: Bool = true) throws -> [MediaItem] {
+        if !includeAllSources {
+            return try confirmed(accountIDs: [accountID])
+        }
+        var accountIDs = [accountID]
+        let allSources = SourceRepository.shared.allSources()
+        if allSources.contains(where: { $0.id == accountID }) {
+            for source in allSources where source.isEnabled && source.id != accountID {
+                accountIDs.append(source.id)
             }
         }
+        return try confirmed(accountIDs: accountIDs)
+    }
+
+    func confirmed(accountIDs: [String]) throws -> [MediaItem] {
+        var items: [MediaItem] = []
+        for id in accountIDs {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, "SELECT payload FROM media_catalog WHERE account_id=? ORDER BY file_id", -1, &statement, nil) == SQLITE_OK,
+                  let statement else { throw MediaCatalogError.database(sqlite3_errcode(database)) }
+            bind(id, statement, 1)
+            while true {
+                let code = sqlite3_step(statement)
+                if code == SQLITE_DONE { break }
+                guard code == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else {
+                    sqlite3_finalize(statement)
+                    throw MediaCatalogError.corruptRecord
+                }
+                let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
+                guard let item = try? JSONDecoder().decode(MediaItem.self, from: data) else {
+                    sqlite3_finalize(statement)
+                    throw MediaCatalogError.corruptRecord
+                }
+                // Filter out items whose titles are bare single numbers (e.g. "04", "01", "(09)")
+                let isBareNumber = item.title.range(of: #"^\(?\d{1,4}\)?$"#, options: .regularExpression) != nil
+                if !isBareNumber {
+                    items.append(item)
+                }
+            }
+            sqlite3_finalize(statement)
+        }
+        return items
     }
 
     func clearAll(accountID: String) throws {

@@ -20,9 +20,60 @@ struct CloudFile: Codable, Equatable, Identifiable {
     let fileExtension: String
     let modifiedAt: Date?
     let isDirectory: Bool
+    var sourceID: String? = nil
     var id: String { fileId }
     var isVideo: Bool {
         !isDirectory && ["mp4", "m4v", "mov", "mkv", "avi", "ts", "m2ts", "webm"].contains(fileExtension.lowercased())
+    }
+
+    init(
+        fileId: String,
+        parentId: String,
+        name: String,
+        size: Int64,
+        fileExtension: String,
+        modifiedAt: Date?,
+        isDirectory: Bool,
+        sourceID: String? = nil
+    ) {
+        self.fileId = fileId
+        self.parentId = parentId
+        self.name = name
+        self.size = size
+        self.fileExtension = fileExtension
+        self.modifiedAt = modifiedAt
+        self.isDirectory = isDirectory
+        self.sourceID = sourceID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fileId, parentId, name, size, fileExtension, modifiedAt, isDirectory
+        case sourceID, sourceId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fileId = try container.decode(String.self, forKey: .fileId)
+        parentId = try container.decode(String.self, forKey: .parentId)
+        name = try container.decode(String.self, forKey: .name)
+        size = try container.decode(Int64.self, forKey: .size)
+        fileExtension = try container.decode(String.self, forKey: .fileExtension)
+        modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt)
+        isDirectory = try container.decode(Bool.self, forKey: .isDirectory)
+        sourceID = try container.decodeIfPresent(String.self, forKey: .sourceID)
+            ?? container.decodeIfPresent(String.self, forKey: .sourceId)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fileId, forKey: .fileId)
+        try container.encode(parentId, forKey: .parentId)
+        try container.encode(name, forKey: .name)
+        try container.encode(size, forKey: .size)
+        try container.encode(fileExtension, forKey: .fileExtension)
+        try container.encodeIfPresent(modifiedAt, forKey: .modifiedAt)
+        try container.encode(isDirectory, forKey: .isDirectory)
+        try container.encodeIfPresent(sourceID, forKey: .sourceID)
     }
 }
 
@@ -99,13 +150,20 @@ struct MediaItem: Codable, Identifiable {
     var rating: Double? = nil
     var genreIDs: [Int]? = nil
     var sourceType: StorageSourceType = .quark
+    var sourceId: String? = nil
     var seasonNumber: Int? = nil
     var episodeNumber: Int? = nil
+
+    var sourceID: String? {
+        get { sourceId }
+        set { sourceId = newValue }
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, fileId, mediaType, title, year, tmdbId
         case posterPath, backdropPath, overview, duration
         case matchConfidence, rating, genreIDs, sourceType
+        case sourceId, sourceID
         case seasonNumber, episodeNumber
     }
 
@@ -115,6 +173,7 @@ struct MediaItem: Codable, Identifiable {
          duration: TimeInterval? = nil, matchConfidence: Double? = nil,
          rating: Double? = nil, genreIDs: [Int]? = nil,
          sourceType: StorageSourceType = .quark,
+         sourceId: String? = nil,
          seasonNumber: Int? = nil, episodeNumber: Int? = nil) {
         self.id = id
         self.fileId = fileId
@@ -130,6 +189,7 @@ struct MediaItem: Codable, Identifiable {
         self.rating = rating
         self.genreIDs = genreIDs
         self.sourceType = sourceType
+        self.sourceId = sourceId ?? (sourceType == .quark ? "quark-default" : nil)
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
     }
@@ -150,8 +210,32 @@ struct MediaItem: Codable, Identifiable {
         rating = try container.decodeIfPresent(Double.self, forKey: .rating)
         genreIDs = try container.decodeIfPresent([Int].self, forKey: .genreIDs)
         sourceType = try container.decodeIfPresent(StorageSourceType.self, forKey: .sourceType) ?? .quark
+        sourceId = try container.decodeIfPresent(String.self, forKey: .sourceId)
+            ?? container.decodeIfPresent(String.self, forKey: .sourceID)
+            ?? (sourceType == .quark ? "quark-default" : nil)
         seasonNumber = try container.decodeIfPresent(Int.self, forKey: .seasonNumber)
         episodeNumber = try container.decodeIfPresent(Int.self, forKey: .episodeNumber)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(fileId, forKey: .fileId)
+        try container.encode(mediaType, forKey: .mediaType)
+        try container.encode(title, forKey: .title)
+        try container.encodeIfPresent(year, forKey: .year)
+        try container.encodeIfPresent(tmdbId, forKey: .tmdbId)
+        try container.encodeIfPresent(posterPath, forKey: .posterPath)
+        try container.encodeIfPresent(backdropPath, forKey: .backdropPath)
+        try container.encodeIfPresent(overview, forKey: .overview)
+        try container.encodeIfPresent(duration, forKey: .duration)
+        try container.encodeIfPresent(matchConfidence, forKey: .matchConfidence)
+        try container.encodeIfPresent(rating, forKey: .rating)
+        try container.encodeIfPresent(genreIDs, forKey: .genreIDs)
+        try container.encode(sourceType, forKey: .sourceType)
+        try container.encodeIfPresent(sourceId, forKey: .sourceId)
+        try container.encodeIfPresent(seasonNumber, forKey: .seasonNumber)
+        try container.encodeIfPresent(episodeNumber, forKey: .episodeNumber)
     }
 }
 

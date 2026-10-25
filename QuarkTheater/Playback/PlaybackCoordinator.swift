@@ -127,6 +127,7 @@ final class PlaybackCoordinator: ObservableObject {
     private let automaticallyPlayNext: Bool
     private let history: HistoryRepository
     private let diagnostics: Diagnostics
+    private let sourceRepository: SourceRepository
     private let retryPolicy = RetryPolicy(maximumRetries: 2, baseDelay: 1)
     private var retryTask: Task<Void, Never>?
     private var retryScheduledGeneration: Int?
@@ -150,7 +151,8 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     init(client: QuarkClient, accountID: String, file: CloudFile, queue: [CloudFile] = [],
-         automaticallyPlayNext: Bool = false, history: HistoryRepository, diagnostics: Diagnostics) {
+         automaticallyPlayNext: Bool = false, history: HistoryRepository, diagnostics: Diagnostics,
+         sourceRepository: SourceRepository = .shared) {
         self.client = client
         self.accountID = accountID
         self.currentFile = file
@@ -158,6 +160,7 @@ final class PlaybackCoordinator: ObservableObject {
         self.automaticallyPlayNext = automaticallyPlayNext
         self.history = history
         self.diagnostics = diagnostics
+        self.sourceRepository = sourceRepository
     }
 
     func start() async {
@@ -425,8 +428,15 @@ final class PlaybackCoordinator: ObservableObject {
         message = nil
         let resource: PlaybackResource
         do {
-            resource = try await client.playbackResource(fileID: requestedFile.id,
-                                                         correlationID: playbackCorrelationID)
+            if let sourceID = requestedFile.sourceID,
+               !sourceID.isEmpty,
+               sourceID != "quark-default",
+               let adapter = sourceRepository.adapter(for: sourceID, client: client) {
+                resource = try await adapter.playbackResource(fileID: requestedFile.fileId)
+            } else {
+                resource = try await client.playbackResource(fileID: requestedFile.fileId,
+                                                             correlationID: playbackCorrelationID)
+            }
         } catch {
             guard requestGeneration == generation, !Task.isCancelled else { throw CancellationError() }
             if retriesUsed == 0,

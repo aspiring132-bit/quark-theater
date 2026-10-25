@@ -51,7 +51,16 @@ final class MediaLibraryScanner {
         roots: [MediaScanRoot],
         progress: @escaping (Int) -> Void = { _ in }
     ) async throws -> [ScannedMediaCandidate] {
-        let initialRoots = roots.isEmpty ? [MediaScanRoot(id: "0", name: nil)] : roots
+        let adapter = QuarkSourceAdapter(sourceID: "quark-default", client: client)
+        return try await scan(adapter: adapter, roots: roots, progress: progress)
+    }
+
+    func scan(
+        adapter: any StorageSourceAdapter,
+        roots: [MediaScanRoot],
+        progress: @escaping (Int) -> Void = { _ in }
+    ) async throws -> [ScannedMediaCandidate] {
+        let initialRoots = roots.isEmpty ? [MediaScanRoot(id: adapter.sourceType == .webdav ? "/" : "0", name: nil)] : roots
         // Track: (id, depth, folderName, pathArray)
         // pathArray records all folder names from root down to this folder
         var pending: [(id: String, depth: Int, folderName: String?, path: [String], rootName: String?)] = initialRoots.map {
@@ -73,7 +82,7 @@ final class MediaLibraryScanner {
             while true {
                 try Task.checkCancellation()
                 let filesSeenBeforePage = seenFiles.count
-                let result = try await client.listFiles(parentID: folder.id, page: page, pageSize: pageSize)
+                let result = try await adapter.listFiles(folderID: folder.id, page: page, pageSize: pageSize)
                 for file in result.files where seenFiles.insert(file.fileId).inserted {
                     if file.isDirectory {
                         if visited.insert(file.fileId).inserted {
@@ -95,8 +104,19 @@ final class MediaLibraryScanner {
                             detectedSeasonNumber: detectedSeason
                         )
                         
+                        let fileWithSource = file.sourceID != nil ? file : CloudFile(
+                            fileId: file.fileId,
+                            parentId: file.parentId,
+                            name: file.name,
+                            size: file.size,
+                            fileExtension: file.fileExtension,
+                            modifiedAt: file.modifiedAt,
+                            isDirectory: file.isDirectory,
+                            sourceID: adapter.sourceID
+                        )
+
                         candidates.append(ScannedMediaCandidate(
-                            file: file,
+                            file: fileWithSource,
                             parsedName: parsed,
                             parentFolderName: immediateParent,
                             ancestorFolderName: detectedShow ?? ancestor,

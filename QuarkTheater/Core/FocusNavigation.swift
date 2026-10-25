@@ -32,6 +32,64 @@ enum RootFocusReducer {
     static func dockTarget(for tab: RootTab) -> RootTab { tab }
 }
 
+enum SettingsCategory: String, Hashable, CaseIterable, Identifiable {
+    case sources = "sources"
+    case playback = "playback"
+    case scraper = "scraper"
+    case dataCache = "dataCache"
+    case diagnostics = "diagnostics"
+    case about = "about"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .sources: return "媒体来源"
+        case .playback: return "播放偏好"
+        case .scraper: return "刮削与匹配"
+        case .dataCache: return "数据与缓存"
+        case .diagnostics: return "日志与诊断"
+        case .about: return "关于"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .sources: return "已连接云盘与 NAS 摘要，跳转至网盘管理"
+        case .playback: return "自动连播、快进/快退步长与播放偏好"
+        case .scraper: return "TMDB 元数据刮削源、语言与已学习别名"
+        case .dataCache: return "观看记录、影视匹配缓存与账号退出"
+        case .diagnostics: return "运行事件过滤、清空日志与维护邮箱导出"
+        case .about: return "版本信息、原生体验与开源组件许可"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .sources: return "externaldrive.connected.to.line.below"
+        case .playback: return "play.circle"
+        case .scraper: return "sparkles.tv"
+        case .dataCache: return "cylinder.split.1x2"
+        case .diagnostics: return "stethoscope"
+        case .about: return "info.circle"
+        }
+    }
+}
+
+enum SettingsFocusReducer {
+    static func shouldConsumeBack(selectedCategory: SettingsCategory?) -> Bool {
+        selectedCategory != nil
+    }
+
+    static func categoryAfterBack(selectedCategory: SettingsCategory?) -> SettingsCategory? {
+        nil
+    }
+
+    static func restoredFocusTarget(afterExiting category: SettingsCategory) -> SettingsCategory {
+        category
+    }
+}
+
 enum FolderBindingBackdropStyle {
     static let blurRadius: CGFloat = 24
     static let dimmingOpacity: Double = 0.72
