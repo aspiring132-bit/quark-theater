@@ -26,13 +26,43 @@ struct MediaItemDetailScreen: View {
     @FocusState private var focusedEpisodeID: String?
     @AppStorage("autoPlayNextEpisode") private var autoPlayNextEpisode = true
 
+    static func activeSeasonEpisodes(for file: CloudFile,
+                                     currentSeasonEpisodes: [(MediaItem, CloudFile, ParsedMediaName)],
+                                     allEpisodes: [(MediaItem, CloudFile, ParsedMediaName)]) -> [(MediaItem, CloudFile, ParsedMediaName)] {
+        if currentSeasonEpisodes.contains(where: { $0.1.fileId == file.fileId }) {
+            return currentSeasonEpisodes
+        }
+        if let targetEntry = allEpisodes.first(where: { $0.1.fileId == file.fileId }) {
+            let targetSeason = targetEntry.2.seasonNumber ?? unassignedSeason
+            let matchingSeason = allEpisodes.filter { ($0.2.seasonNumber ?? unassignedSeason) == targetSeason }
+            if !matchingSeason.isEmpty {
+                return matchingSeason
+            }
+        }
+        return currentSeasonEpisodes
+    }
+
     static func playbackQueue(for selectedFile: CloudFile,
-                              episodes: [(MediaItem, CloudFile, ParsedMediaName)]) -> [CloudFile] {
-        guard let selected = episodes.first(where: { $0.1.fileId == selectedFile.fileId }) else {
+                              episodes: [(MediaItem, CloudFile, ParsedMediaName)],
+                              allEpisodes: [(MediaItem, CloudFile, ParsedMediaName)] = []) -> [CloudFile] {
+        let candidateEpisodes: [(MediaItem, CloudFile, ParsedMediaName)]
+        if episodes.contains(where: { $0.1.fileId == selectedFile.fileId }) {
+            candidateEpisodes = episodes
+        } else if !allEpisodes.isEmpty {
+            candidateEpisodes = activeSeasonEpisodes(
+                for: selectedFile,
+                currentSeasonEpisodes: episodes,
+                allEpisodes: allEpisodes
+            )
+        } else {
+            candidateEpisodes = episodes
+        }
+
+        guard let selected = candidateEpisodes.first(where: { $0.1.fileId == selectedFile.fileId }) else {
             return [selectedFile]
         }
         guard selected.2.episodeNumber != nil else { return [selectedFile] }
-        return episodes.filter { $0.2.episodeNumber != nil }.map { $0.1 }
+        return candidateEpisodes.filter { $0.2.episodeNumber != nil }.map { $0.1 }
     }
 
     /// Builds one rematch candidate per confirmed file. Confirmed metadata is
@@ -228,6 +258,10 @@ struct MediaItemDetailScreen: View {
                                             event: .episodeSelectionRequested,
                                             metadata: target.2.episodeNumber.map { [.episodeNumber($0)] } ?? []
                                         )
+                                        if let season = target.2.seasonNumber {
+                                            selectedSeason = season
+                                        }
+                                        focusedEpisodeID = target.1.fileId
                                         selectedFile = target.1
                                     } label: {
                                         let epNum = target.2.episodeNumber
@@ -335,16 +369,24 @@ struct MediaItemDetailScreen: View {
             .accessibilityHidden(isPlayerPresented)
 
             if let file = selectedFile {
+                let targetSeasonEpisodes = Self.activeSeasonEpisodes(
+                    for: file,
+                    currentSeasonEpisodes: currentSeasonEpisodes,
+                    allEpisodes: episodes
+                )
                 PlayerScreen(
                     client: client,
                     accountID: accountID,
                     file: file,
-                    queue: Self.playbackQueue(for: file, episodes: currentSeasonEpisodes),
+                    queue: Self.playbackQueue(for: file, episodes: targetSeasonEpisodes, allEpisodes: episodes),
                     automaticallyPlayNext: autoPlayNextEpisode,
                     history: history,
                     diagnostics: diagnostics,
                     backdropURL: item.backdropPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") },
-                    episodeMetadataByFileID: Dictionary(uniqueKeysWithValues: currentSeasonEpisodes.map { ($0.1.fileId, $0.2) }),
+                    episodeMetadataByFileID: Dictionary(
+                        episodes.map { ($0.1.fileId, $0.2) },
+                        uniquingKeysWith: { first, _ in first }
+                    ),
                     seriesTMDBId: item.mediaType == .series ? item.tmdbId : nil,
                     onRequestDismiss: {
                         selectedFile = nil

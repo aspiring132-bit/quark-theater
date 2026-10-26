@@ -2,12 +2,205 @@ import SwiftUI
 import UIKit
 
 @MainActor
+final class PlayerPresentationManager {
+    static let notificationName = Notification.Name("QuarkTheater.playerPresentationDidChange")
+    private static var activeTokens: Set<AnyHashable> = []
+    private static var isDirectlyPresented: Bool = false
+
+    static var isPlayerPresented: Bool {
+        isDirectlyPresented || !activeTokens.isEmpty
+    }
+
+    static var activeCount: Int {
+        isPlayerPresented ? 1 : 0
+    }
+
+    static func playerDidAppear(token: AnyHashable? = nil) {
+        let wasPresented = isPlayerPresented
+        if let token {
+            activeTokens.insert(token)
+        } else {
+            isDirectlyPresented = true
+        }
+        if !wasPresented && isPlayerPresented {
+            postNotification()
+        }
+    }
+
+    static func playerDidDisappear(token: AnyHashable? = nil) {
+        let wasPresented = isPlayerPresented
+        if let token {
+            activeTokens.remove(token)
+        } else {
+            isDirectlyPresented = false
+            activeTokens.removeAll()
+        }
+        if wasPresented && !isPlayerPresented {
+            postNotification()
+        }
+    }
+
+    static func resetForTesting() {
+        activeTokens.removeAll()
+        isDirectlyPresented = false
+        postNotification()
+    }
+
+    private static func postNotification() {
+        NotificationCenter.default.post(
+            name: notificationName,
+            object: nil,
+            userInfo: ["isPresented": isPlayerPresented]
+        )
+    }
+}
+
+struct DrawerEpisodeRailMetrics: Equatable {
+    static let cardsPerViewport: Int = 3
+    static let cardWidth: CGFloat = 370
+    static let cardHeight: CGFloat = 220
+    static let thumbnailHeight: CGFloat = 138
+    static let infoHeight: CGFloat = 82
+    static let cardSpacing: CGFloat = 30
+    static let horizontalPadding: CGFloat = 35
+    static let verticalPadding: CGFloat = 32
+    static let railHeight: CGFloat = 320
+    static let nextActionWidth: CGFloat = 200
+    static let nextActionHeight: CGFloat = 190
+    static let focusedScale: CGFloat = 1.05
+    static let focusedShadowRadius: CGFloat = 14
+    static let focusedShadowYOffset: CGFloat = 6
+
+    static var viewportWidth: CGFloat {
+        CGFloat(cardsPerViewport) * cardWidth + CGFloat(cardsPerViewport - 1) * cardSpacing + (2 * horizontalPadding)
+    }
+
+    static func totalRailWidth(includingNextAction: Bool) -> CGFloat {
+        if includingNextAction {
+            return nextActionWidth + cardSpacing + viewportWidth
+        } else {
+            return viewportWidth
+        }
+    }
+
+    static func drawerWidth(includingNextAction: Bool) -> CGFloat {
+        totalRailWidth(includingNextAction: includingNextAction) + 80
+    }
+
+    static var drawerWidth: CGFloat {
+        drawerWidth(includingNextAction: true)
+    }
+
+    static var scaledCardHeight: CGFloat {
+        cardHeight * focusedScale
+    }
+
+    static var scaledCardWidth: CGFloat {
+        cardWidth * focusedScale
+    }
+
+    static var verticalClearance: CGFloat {
+        railHeight - scaledCardHeight
+    }
+
+    static var verticalExpansionPerSide: CGFloat {
+        (scaledCardHeight - cardHeight) / 2
+    }
+
+    static var horizontalExpansionPerSide: CGFloat {
+        (scaledCardWidth - cardWidth) / 2
+    }
+
+    static var topOverflow: CGFloat {
+        verticalExpansionPerSide + focusedShadowRadius
+    }
+
+    static var bottomOverflow: CGFloat {
+        verticalExpansionPerSide + focusedShadowRadius + focusedShadowYOffset
+    }
+
+    static var horizontalOverflow: CGFloat {
+        horizontalExpansionPerSide + focusedShadowRadius
+    }
+
+    static func scale(isFocused: Bool) -> CGFloat {
+        isFocused ? focusedScale : 1.0
+    }
+}
+
+enum PlayerBackDisposition: Equatable, Sendable {
+    case closeDrawer
+    case dismissPlayer
+    case ignore
+
+    var diagnosticDisposition: DiagnosticBackDisposition {
+        switch self {
+        case .closeDrawer:
+            return .closedDrawer
+        case .dismissPlayer:
+            return .dismissedPlayer
+        case .ignore:
+            return .ignored
+        }
+    }
+}
+
+struct PlayerBackTransitionState: Equatable, Sendable {
+    var isDrawerOpen: Bool
+    var lastDrawerCloseDate: Date?
+    var lastBackDate: Date?
+    var focusedTarget: PlayerFocusTarget?
+}
+
+enum PlayerBackTransitionReducer {
+    /// Debounce interval to suppress rapid duplicate events (e.g. key-repeat, button down + up bounce).
+    static let duplicateDebounceInterval: TimeInterval = 0.50
+    /// tvOS can deliver a trailing/repeated Menu event while the drawer is
+    /// closing and focus is being restored. Keep that event from being
+    /// interpreted as a second, player-dismissal command.
+    static let drawerCloseCooldown: TimeInterval = 3.0
+
+    static func evaluate(state: PlayerBackTransitionState, at currentDate: Date) -> PlayerBackDisposition {
+        // 1. Rapid duplicate back command within debounce window
+        if let lastBack = state.lastBackDate, currentDate.timeIntervalSince(lastBack) < duplicateDebounceInterval {
+            return .ignore
+        }
+        // 2. When drawer is visibly open, back MUST only close the drawer
+        if state.isDrawerOpen {
+            return .closeDrawer
+        }
+        // 3. Late duplicate or trailing back event within drawer close cooldown
+        if let lastClose = state.lastDrawerCloseDate, currentDate.timeIntervalSince(lastClose) < drawerCloseCooldown {
+            return .ignore
+        }
+        // 4. Focus is in transit (nil) following drawer close or still targeting drawer elements
+        if state.focusedTarget == nil {
+            return .ignore
+        }
+        if PlayerInputReducer.isContentLevel(state.focusedTarget) {
+            return .ignore
+        }
+        if case .drawerTab = state.focusedTarget {
+            return .ignore
+        }
+        // 5. Drawer is closed, cooldown has elapsed, and player surface has stable focus: allow dismissal
+        return .dismissPlayer
+    }
+}
+
+enum PlayerCanvasPreviewPolicy {
+    static func shouldStartPlayback(isCanvasPreview: Bool) -> Bool { !isCanvasPreview }
+    static func shouldShowStaticSurface(isCanvasPreview: Bool) -> Bool { isCanvasPreview }
+    static func shouldOpenDrawerInitially(isCanvasPreview: Bool) -> Bool { isCanvasPreview }
+}
+
+@MainActor
 struct PlayerScreen: View {
     @StateObject private var coordinator: PlaybackCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     static let hintDismissDurationSeconds: Double = 3.0
-    @State private var showDrawer = false
+    @State private var showDrawer: Bool
     @State private var showHintPill = true
     @State private var selectedDrawerTab: DrawerTab = .episodes
     @State private var isSeeking = false
@@ -30,6 +223,7 @@ struct PlayerScreen: View {
     private let seriesTMDBId: Int?
     private let artworkProvider: EpisodeArtworkProvider?
     private let onRequestDismiss: (() -> Void)?
+    private let isCanvasPreview: Bool
 
     @FocusState private var focusedTarget: PlayerFocusTarget?
 
@@ -47,6 +241,7 @@ struct PlayerScreen: View {
          episodeMetadataByFileID: [String: ParsedMediaName] = [:],
          seriesTMDBId: Int? = nil,
          artworkProvider: EpisodeArtworkProvider? = nil,
+         isCanvasPreview: Bool = false,
          onRequestDismiss: (() -> Void)? = nil,
          // Narrow UI-test seam: lets a harness observe the real coordinator's
          // state. Never set in production call sites.
@@ -57,6 +252,8 @@ struct PlayerScreen: View {
         self.seriesTMDBId = seriesTMDBId
         self.artworkProvider = artworkProvider
         self.onRequestDismiss = onRequestDismiss
+        self.isCanvasPreview = isCanvasPreview
+        _showDrawer = State(initialValue: PlayerCanvasPreviewPolicy.shouldOpenDrawerInitially(isCanvasPreview: isCanvasPreview))
         let playbackCoordinator = PlaybackCoordinator(
             client: client,
             accountID: accountID,
@@ -76,7 +273,9 @@ struct PlayerScreen: View {
 
             // 1. Full-screen VLC surface. The coordinator owns the engine;
             // this surface is deliberately independent from the drawer/focus tree.
-            if coordinator.hasActivePlayer {
+            if PlayerCanvasPreviewPolicy.shouldShowStaticSurface(isCanvasPreview: isCanvasPreview) {
+                Color.black.ignoresSafeArea()
+            } else if coordinator.hasActivePlayer {
                 VLCVideoSurface(coordinator: coordinator)
                     .ignoresSafeArea()
                     .allowsHitTesting(!showDrawer)
@@ -130,7 +329,7 @@ struct PlayerScreen: View {
             }
 
             // 2. Bottom Drawer Trigger Pill (auto fades after 3s)
-            if !showDrawer && coordinator.hasActivePlayer {
+            if !showDrawer && (coordinator.hasActivePlayer || isCanvasPreview) {
                 Button {
                     // OK/Select on the main player screen toggles play/pause, avoiding accidental drawer opening (BUG-009).
                     // Drawer is opened strictly via Down move command.
@@ -153,9 +352,6 @@ struct PlayerScreen: View {
                 .buttonStyle(DrawerTriggerButtonStyle())
                 .focusEffectDisabled(true)
                 .focused($focusedTarget, equals: .drawerTrigger)
-                .onExitCommand {
-                    handleBackCommand()
-                }
                 .accessibilityIdentifier("player.drawerTrigger")
                 // Keep the trigger focusable in the focus tree after the hint fades so
                 // it retains focus stably and prevents conditional overlay buttons from stealing focus.
@@ -194,14 +390,15 @@ struct PlayerScreen: View {
                 let duration = coordinator.playbackDuration
                 let markers = coordinator.currentEpisodeMarkers
 
-                if let intro = markers.intro, duration > 0, time >= intro.startSeconds && time < min(intro.endSeconds, duration) {
-                    Button {
-                        coordinator.seek(to: min(intro.endSeconds, duration))
-                    } label: {
+                if let intro = markers.intro, duration > 0,
+                   (time >= intro.startSeconds && time < min(intro.endSeconds, duration)) || coordinator.introSkipStatus != .idle {
+                    switch coordinator.introSkipStatus {
+                    case .pending:
                         HStack(spacing: 8) {
-                            Image(systemName: "forward.end.alt.fill")
-                                .font(.headline)
-                            Text("跳过片头")
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .scaleEffect(0.8)
+                            Text("正在跳过…")
                                 .font(.headline.weight(.semibold))
                         }
                         .padding(.horizontal, 24)
@@ -209,16 +406,54 @@ struct PlayerScreen: View {
                         .background(.ultraThinMaterial, in: Capsule())
                         .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1.5))
                         .shadow(color: .black.opacity(0.4), radius: 8, x: 0, y: 4)
+                        .padding(.trailing, 60)
+                        .padding(.bottom, 60)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    case .failed(let message):
+                        Button {
+                            coordinator.skipIntro()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.headline)
+                                Text(message)
+                                    .font(.headline.weight(.semibold))
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 14)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(Color.orange.opacity(0.7), lineWidth: 1.5))
+                            .shadow(color: .black.opacity(0.4), radius: 8, x: 0, y: 4)
+                        }
+                        .buttonStyle(.plain)
+                        .focused($focusedTarget, equals: .skipIntro)
+                        .accessibilityIdentifier("player.skipIntroButton")
+                        .padding(.trailing, 60)
+                        .padding(.bottom, 60)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    case .idle:
+                        Button {
+                            coordinator.skipIntro()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "forward.end.alt.fill")
+                                    .font(.headline)
+                                Text("跳过片头")
+                                    .font(.headline.weight(.semibold))
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 14)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1.5))
+                            .shadow(color: .black.opacity(0.4), radius: 8, x: 0, y: 4)
+                        }
+                        .buttonStyle(.plain)
+                        .focused($focusedTarget, equals: .skipIntro)
+                        .accessibilityIdentifier("player.skipIntroButton")
+                        .padding(.trailing, 60)
+                        .padding(.bottom, 60)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     }
-                    .buttonStyle(.plain)
-                    .focused($focusedTarget, equals: .skipIntro)
-                    .onExitCommand {
-                        handleBackCommand()
-                    }
-                    .accessibilityIdentifier("player.skipIntroButton")
-                    .padding(.trailing, 60)
-                    .padding(.bottom, 60)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 } else if let outro = markers.outro, duration > 0, coordinator.canPlayNext, time >= outro.startSeconds && time < min(outro.endSeconds, duration) {
                     Button {
                         coordinator.playNext(manualSelection: true)
@@ -237,9 +472,6 @@ struct PlayerScreen: View {
                     }
                     .buttonStyle(.plain)
                     .focused($focusedTarget, equals: .skipOutro)
-                    .onExitCommand {
-                        handleBackCommand()
-                    }
                     .accessibilityIdentifier("player.skipOutroButton")
                     .padding(.trailing, 60)
                     .padding(.bottom, 60)
@@ -252,15 +484,23 @@ struct PlayerScreen: View {
         }
         .task {
             if focusedTarget == nil {
-                focusedTarget = .drawerTrigger
+                focusedTarget = isCanvasPreview
+                    ? .episode(coordinator.committedActiveFileID)
+                    : .drawerTrigger
             }
             restartHintDismissTimer()
-            await coordinator.start()
+            if PlayerCanvasPreviewPolicy.shouldStartPlayback(isCanvasPreview: isCanvasPreview) {
+                await coordinator.start()
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { coordinator.saveProgress() }
         }
+        .onAppear {
+            PlayerPresentationManager.playerDidAppear()
+        }
         .onDisappear {
+            PlayerPresentationManager.playerDidDisappear()
             coordinator.stop()
             artworkLoadTask?.cancel()
         }
@@ -381,7 +621,7 @@ struct PlayerScreen: View {
     private var defaultContentTarget: PlayerFocusTarget? {
         switch selectedDrawerTab {
         case .episodes:
-            let currentFileID = coordinator.currentPlayingFile.fileId
+            let currentFileID = coordinator.committedActiveFileID
             if coordinator.playlistQueue.contains(where: { $0.fileId == currentFileID }) {
                 return .episode(currentFileID)
             }
@@ -404,7 +644,7 @@ struct PlayerScreen: View {
         }
         loadEpisodeArtwork()
         // Give a brief moment for views to appear, then set focus
-        let currentID = coordinator.activePlayingFileID ?? coordinator.currentPlayingFile.fileId
+        let currentID = coordinator.committedActiveFileID
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             focusedTarget = .episode(currentID)
         }
@@ -485,14 +725,16 @@ struct PlayerScreen: View {
 
     private func handleBackCommand() {
         let now = Date()
-        if let last = lastBackDate, now.timeIntervalSince(last) < 0.35 {
-            return
-        }
-        lastBackDate = now
+        let transitionState = PlayerBackTransitionState(
+            isDrawerOpen: showDrawer,
+            lastDrawerCloseDate: lastDrawerCloseTime,
+            lastBackDate: lastBackDate,
+            focusedTarget: focusedTarget
+        )
+        let disposition = PlayerBackTransitionReducer.evaluate(state: transitionState, at: now)
 
-        let action = PlayerInputReducer.handleBack(state: currentInputState)
         var metadata: [DiagnosticMetadata] = [
-            .backDisposition(action == .closeDrawer ? .closedDrawer : .dismissedPlayer)
+            .backDisposition(disposition.diagnosticDisposition)
         ]
         let playingID = coordinator.currentPlayingFile.fileId
         if let ordinal = coordinator.playlistQueue.firstIndex(where: { $0.fileId == playingID }) {
@@ -508,16 +750,18 @@ struct PlayerScreen: View {
             correlationID: coordinator.playbackCorrelation,
             metadata: metadata
         )
-        print("[PlayerScreen] handleBackCommand: action=\(action), isDrawerOpen=\(currentInputState.isDrawerOpen), playingID=\(playingID)")
-        if action == .closeDrawer {
+        print("[PlayerScreen] handleBackCommand: disposition=\(disposition), isDrawerOpen=\(showDrawer), focusedTarget=\(String(describing: focusedTarget)), playingID=\(playingID)")
+
+        switch disposition {
+        case .closeDrawer:
+            lastBackDate = now
             closeDrawer()
-            return
+        case .ignore:
+            break
+        case .dismissPlayer:
+            lastBackDate = now
+            requestDismiss()
         }
-        if let closeTime = lastDrawerCloseTime, now.timeIntervalSince(closeTime) < 0.45 {
-            // Absorb back command during or right after drawer close animation to avoid accidental dismissal
-            return
-        }
-        requestDismiss()
     }
 
     private func requestDismiss() {
@@ -612,11 +856,11 @@ struct PlayerScreen: View {
                 case .audio: audioView
                 }
             }
-            .frame(minHeight: 180, maxHeight: 300)
+            .frame(minHeight: 180, maxHeight: DrawerEpisodeRailMetrics.railHeight)
             .padding(.top, 8)
         }
         .padding(.bottom, 24)
-        .frame(maxWidth: 1600, maxHeight: 500, alignment: .bottom)
+        .frame(maxWidth: DrawerEpisodeRailMetrics.drawerWidth(includingNextAction: coordinator.canPlayNext), maxHeight: 520, alignment: .bottom)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
         .overlay(
             RoundedRectangle(cornerRadius: 28)
@@ -675,9 +919,6 @@ struct PlayerScreen: View {
         }
         .buttonStyle(.plain)
         .focused($focusedTarget, equals: .drawerTab(tab.rawValue))
-        .onExitCommand {
-            handleBackCommand()
-        }
         .accessibilityIdentifier("player.tab.\(tab.rawValue)")
     }
 
@@ -692,67 +933,63 @@ struct PlayerScreen: View {
     // MARK: - Episodes Content Row
     @ViewBuilder
     private var episodesView: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 36) {
-                    if coordinator.canPlayNext {
-                        nextEpisodeButton
-                    }
+        HStack(spacing: DrawerEpisodeRailMetrics.cardSpacing) {
+            if coordinator.canPlayNext {
+                nextEpisodeButton
+            }
 
-                    ForEach(Array(coordinator.playlistQueue.enumerated()), id: \.element.fileId) { index, file in
-                        let isCurrent = coordinator.activePlayingFileID.map { file.fileId == $0 }
-                            ?? (coordinator.isCurrentPlaybackStarted && file.fileId == coordinator.currentPlayingFile.fileId)
-                        let isPending = file.fileId == coordinator.pendingFile?.fileId
-                            || (coordinator.isPlaybackTransitionActive && file.fileId == coordinator.currentPlayingFile.fileId)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: DrawerEpisodeRailMetrics.cardSpacing) {
+                        ForEach(Array(coordinator.playlistQueue.enumerated()), id: \.element.fileId) { index, file in
+                            let isCurrent = coordinator.isEpisodePlaying(fileID: file.fileId) ||
+                                (isCanvasPreview && file.fileId == coordinator.committedActiveFileID)
+                            let isPending = coordinator.isEpisodePending(fileID: file.fileId)
 
-                        DrawerEpisodeCard(
-                            file: file,
-                            parsedMetadata: episodeMetadataByFileID[file.fileId],
-                            episodeTitle: episodeTitleByFileID[file.fileId],
-                            isCurrent: isCurrent,
-                            isPending: isPending,
-                            // Fallback chain: episode still → series backdrop → placeholder.
-                            artworkURL: stillURLByFileID[file.fileId] ?? backdropURL,
-                            action: {
-                                coordinator.playFile(
-                                    file,
-                                    selectionOrdinal: index,
-                                    episodeNumber: episodeMetadataByFileID[file.fileId]?.episodeNumber
-                                )
-                                closeDrawer()
-                            },
-                            onExit: {
-                                handleBackCommand()
-                            }
-                        )
-                        .id(PlayerFocusTarget.episode(file.fileId))
-                        .focused($focusedTarget, equals: .episode(file.fileId))
-                        .onExitCommand {
-                            handleBackCommand()
+                            DrawerEpisodeCard(
+                                file: file,
+                                parsedMetadata: episodeMetadataByFileID[file.fileId],
+                                episodeTitle: episodeTitleByFileID[file.fileId],
+                                isCurrent: isCurrent,
+                                isPending: isPending,
+                                // Fallback chain: episode still → series backdrop → placeholder.
+                                artworkURL: stillURLByFileID[file.fileId] ?? backdropURL,
+                                action: {
+                                    guard !isCanvasPreview else { return }
+                                    coordinator.playFile(
+                                        file,
+                                        selectionOrdinal: index,
+                                        episodeNumber: episodeMetadataByFileID[file.fileId]?.episodeNumber
+                                    )
+                                    closeDrawer()
+                                }
+                            )
+                            .id(PlayerFocusTarget.episode(file.fileId))
+                            .focused($focusedTarget, equals: .episode(file.fileId))
+                            .accessibilityIdentifier("player.episodeCard.\(index)")
                         }
-                        // Index-based identifier: never exposes real cloud file IDs.
-                        .accessibilityIdentifier("player.episodeCard.\(index)")
+                    }
+                    .padding(.horizontal, DrawerEpisodeRailMetrics.horizontalPadding)
+                    // The focused card scales to 1.05. Keep generous breathing room so
+                    // its top episode/playing badges stay clear of the ScrollView's clipping bounds.
+                    .padding(.vertical, DrawerEpisodeRailMetrics.verticalPadding)
+                }
+                .scrollClipDisabled()
+                .frame(width: DrawerEpisodeRailMetrics.viewportWidth, height: DrawerEpisodeRailMetrics.railHeight)
+                .accessibilityIdentifier("player.episodeScroll")
+                .onAppear {
+                    let targetID = coordinator.committedActiveFileID
+                    proxy.scrollTo(PlayerFocusTarget.episode(targetID), anchor: .center)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        guard showDrawer, selectedDrawerTab == .episodes else { return }
+                        focusedTarget = .episode(targetID)
                     }
                 }
-                .padding(.horizontal, 64)
-                // The focused card scales to 1.05. Keep generous breathing room so
-                // its top episode/playing badges stay clear of the ScrollView's clipping bounds.
-                .padding(.vertical, 36)
-            }
-            .frame(height: 310)
-            .accessibilityIdentifier("player.episodeScroll")
-            .onAppear {
-                let targetID = coordinator.activePlayingFileID ?? coordinator.currentPlayingFile.fileId
-                proxy.scrollTo(PlayerFocusTarget.episode(targetID), anchor: .center)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    guard showDrawer, selectedDrawerTab == .episodes else { return }
-                    focusedTarget = .episode(targetID)
-                }
-            }
-            .onChange(of: focusedTarget) { _, target in
-                guard let target else { return }
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    proxy.scrollTo(target, anchor: .center)
+                .onChange(of: focusedTarget) { _, target in
+                    guard let target else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo(target, anchor: .center)
+                    }
                 }
             }
         }
@@ -802,9 +1039,6 @@ struct PlayerScreen: View {
         .buttonStyle(.plain)
         .id(PlayerFocusTarget.nextEpisode)
         .focused($focusedTarget, equals: .nextEpisode)
-        .onExitCommand {
-            handleBackCommand()
-        }
         .accessibilityIdentifier("player.nextEpisode")
     }
 
@@ -826,9 +1060,6 @@ struct PlayerScreen: View {
                 }
                 .id(PlayerFocusTarget.subtitle("off"))
                 .focused($focusedTarget, equals: .subtitle("off"))
-                .onExitCommand {
-                    handleBackCommand()
-                }
 
                 let names = coordinator.subtitleTrackNames
                 if names.isEmpty {
@@ -850,9 +1081,6 @@ struct PlayerScreen: View {
                         }
                         .id(PlayerFocusTarget.subtitle(String(index)))
                         .focused($focusedTarget, equals: .subtitle(String(index)))
-                        .onExitCommand {
-                            handleBackCommand()
-                        }
                     }
                 }
             }
@@ -888,9 +1116,6 @@ struct PlayerScreen: View {
                         }
                         .id(PlayerFocusTarget.audio(String(index)))
                         .focused($focusedTarget, equals: .audio(String(index)))
-                        .onExitCommand {
-                            handleBackCommand()
-                        }
                     }
                 }
                 .padding(.horizontal, 44)
@@ -967,9 +1192,6 @@ struct PlayerScreen: View {
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
         .buttonStyle(.plain)
-        .onExitCommand {
-            handleBackCommand()
-        }
     }
 
     // MARK: - Speed Badge View
@@ -1306,7 +1528,7 @@ private struct DrawerEpisodeCard: View {
     private var infoArea: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(cardTitle)
-                .font(.subheadline.weight(isFocused ? .bold : .semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(isFocused ? Color.white : Color.primary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
@@ -1327,8 +1549,8 @@ private struct DrawerEpisodeCard: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .frame(width: 360, height: 75, alignment: .leading)
+        .padding(.vertical, 8)
+        .frame(width: DrawerEpisodeRailMetrics.cardWidth, height: DrawerEpisodeRailMetrics.infoHeight, alignment: .leading)
         .background(infoBackgroundColor)
     }
 
@@ -1336,12 +1558,12 @@ private struct DrawerEpisodeCard: View {
         Button(action: action) {
             VStack(spacing: 0) {
                 thumbnailBanner
-                    .frame(width: 360, height: 135)
+                    .frame(width: DrawerEpisodeRailMetrics.cardWidth, height: DrawerEpisodeRailMetrics.thumbnailHeight)
                     .clipped()
 
                 infoArea
             }
-            .frame(width: 360, height: 210)
+            .frame(width: DrawerEpisodeRailMetrics.cardWidth, height: DrawerEpisodeRailMetrics.cardHeight)
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
@@ -1351,17 +1573,17 @@ private struct DrawerEpisodeCard: View {
                 color: isCurrent
                     ? BrandPalette.iceBlue.opacity(isFocused ? 0.8 : 0.45)
                     : (isFocused ? BrandPalette.glassWhite.opacity(0.5) : Color.black.opacity(0.35)),
-                radius: isFocused ? 14 : 6,
+                radius: isFocused ? DrawerEpisodeRailMetrics.focusedShadowRadius : 6,
                 x: 0,
-                y: isFocused ? 6 : 2
+                y: isFocused ? DrawerEpisodeRailMetrics.focusedShadowYOffset : 2
             )
-            .scaleEffect(DrawerButtonFocusStyle.scale(isFocused: isFocused))
+            .scaleEffect(DrawerEpisodeRailMetrics.scale(isFocused: isFocused))
+            .zIndex(isFocused ? 1 : 0)
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isFocused)
         }
         .buttonStyle(.plain)
-        .onExitCommand {
-            onExit?()
-        }
+        .focusEffectDisabled(true)
+        .zIndex(isFocused ? 1 : 0)
     }
 
     @ViewBuilder

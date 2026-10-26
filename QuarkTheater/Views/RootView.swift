@@ -12,6 +12,7 @@ struct RootView: View {
     @State private var selectedTab: RootTab = .media
     @State private var showFolderSelection = false
     @State private var didRecordStorageFailure = false
+    @State private var isPlayerPresented = false
     @FocusState private var focusedDockTab: RootTab?
 
     var body: some View {
@@ -47,7 +48,9 @@ struct RootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     // MARK: - 2. Full-Width FocusSection Floating Dock Bar
-                    dockContainer
+                    if !isPlayerPresented {
+                        dockContainer
+                    }
                 }
                 .blur(radius: FolderBindingBackdropStyle.blur(isPresented: showFolderSelection))
                 .overlay {
@@ -60,6 +63,16 @@ struct RootView: View {
             }
         }
         .ignoresSafeArea()
+        .onReceive(NotificationCenter.default.publisher(for: PlayerPresentationManager.notificationName)) { notification in
+            if let isPresented = notification.userInfo?["isPresented"] as? Bool {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isPlayerPresented = isPresented
+                }
+            }
+        }
+        .onAppear {
+            isPlayerPresented = PlayerPresentationManager.isPlayerPresented
+        }
         .modifier(RootBackHandler(isEnabled: RootFocusReducer.shouldConsumeBack(selectedTab)) {
             selectedTab = RootFocusReducer.selectedTabAfterBack(selectedTab)
         })

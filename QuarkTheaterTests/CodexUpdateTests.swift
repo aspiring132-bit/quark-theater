@@ -444,13 +444,15 @@ final class CodexUpdateTests: XCTestCase {
         )
 
         let stubClient = EpisodeSwitchStubClient()
+        let engine = StubPlaybackEngine()
         let coordinator = PlaybackCoordinator(
             client: stubClient,
             accountID: "account-1",
             file: ep1,
             queue: [ep1, ep5],
             history: history,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            engine: engine
         )
 
         // 1. Initial play started for ep1 (stub holds ep1 continuation to simulate slow resolution)
@@ -485,12 +487,12 @@ final class CodexUpdateTests: XCTestCase {
         XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
         XCTAssertEqual(coordinator.pendingFile?.fileId, "ep5")
 
-        // 5. Ep5 network finishes and playback commits
+        // 5. Ep5 network finishes and engine loads; ep1 stays committed and ep5 stays pending until .playing
         stubClient.resumeContinuation(for: "ep5", with: .success(ep5Resource))
         _ = await switchTask.value
 
-        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep5")
-        XCTAssertNil(coordinator.pendingFile)
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertEqual(coordinator.pendingFile?.fileId, "ep5")
         XCTAssertFalse(coordinator.isCurrentPlaybackStarted)
         XCTAssertTrue(coordinator.isPlaybackTransitionActive)
         await diagnostics.waitForPendingOperations()
@@ -498,6 +500,23 @@ final class CodexUpdateTests: XCTestCase {
         XCTAssertEqual(selection.metadata["episodeOrdinal"], .int(1))
         XCTAssertEqual(selection.metadata["episodeNumber"], .int(5))
         XCTAssertFalse(diagnostics.records.contains { $0.event == .started })
+
+        // 6. Engine emits .playing event, committing the playback transition to ep5
+        engine.eventHandler?(.stateChanged(PlaybackSnapshot(
+            generation: coordinator.generation,
+            state: .playing,
+            currentTime: 0,
+            duration: 100,
+            bufferedTime: 0,
+            networkRate: 1024,
+            hasVideoOutput: true,
+            bufferedRanges: []
+        )))
+
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep5")
+        XCTAssertNil(coordinator.pendingFile)
+        XCTAssertTrue(coordinator.isCurrentPlaybackStarted)
+        XCTAssertFalse(coordinator.isPlaybackTransitionActive)
 
     }
 
@@ -555,6 +574,235 @@ final class CodexUpdateTests: XCTestCase {
         XCTAssertFalse(coordinator.isCurrentPlaybackStarted)
         XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
         XCTAssertNotNil(coordinator.message)
+    }
+
+    func testActiveAndPendingEpisodeIdentitiesRemainDistinct() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quark-coordinator-identity-\(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
+        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
+        let ep1 = CloudFile(fileId: "ep1", parentId: "show", name: "Show.S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep2 = CloudFile(fileId: "ep2", parentId: "show", name: "Show.S01E02.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let stubClient = EpisodeSwitchStubClient()
+        let coordinator = PlaybackCoordinator(client: stubClient, accountID: "account-1", file: ep1, queue: [ep1, ep2], history: history, diagnostics: diagnostics)
+
+        // 1. Initial committed active file is ep1
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertEqual(coordinator.committedActiveFileID, "ep1")
+        XCTAssertNil(coordinator.pendingFile)
+
+        // 2. Select ep2 while in flight
+        _ = coordinator.playFile(ep2, selectionOrdinal: 1, episodeNumber: 2)
+        XCTAssertEqual(coordinator.pendingFile?.fileId, "ep2")
+        // Committed identity must REMAIN ep1, never ep2 while pending
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertEqual(coordinator.committedActiveFileID, "ep1")
+        XCTAssertFalse(coordinator.isEpisodePlaying(fileID: "ep2"))
+        XCTAssertTrue(coordinator.isEpisodePlaying(fileID: "ep1"))
+        XCTAssertTrue(coordinator.isEpisodePending(fileID: "ep2"))
+        XCTAssertFalse(coordinator.isEpisodePending(fileID: "ep1"))
+    }
+
+    func testResourceResolutionAndLoadBeforeAndAfterPlaying() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quark-coordinator-reg-\(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
+        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
+        let ep1 = CloudFile(fileId: "ep1", parentId: "show", name: "Show.S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep2 = CloudFile(fileId: "ep2", parentId: "show", name: "Show.S01E02.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let stubClient = EpisodeSwitchStubClient()
+        let engine = StubPlaybackEngine()
+        let coordinator = PlaybackCoordinator(
+            client: stubClient,
+            accountID: "account-1",
+            file: ep1,
+            queue: [ep1, ep2],
+            history: history,
+            diagnostics: diagnostics,
+            engine: engine
+        )
+
+        // 1. Initial launch state before any playback:
+        // No active playing ID exists yet; must preserve fallback to ep1
+        XCTAssertNil(coordinator.activePlayingFileID)
+        XCTAssertEqual(coordinator.committedActiveFileID, "ep1")
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertTrue(coordinator.isEpisodePlaying(fileID: "ep1"))
+        XCTAssertFalse(coordinator.isEpisodePlaying(fileID: "ep2"))
+        XCTAssertFalse(coordinator.isEpisodePending(fileID: "ep1"))
+        XCTAssertFalse(coordinator.isEpisodePending(fileID: "ep2"))
+
+        // Simulate ep1 reaching .playing
+        engine.eventHandler?(.stateChanged(PlaybackSnapshot(
+            generation: coordinator.generation,
+            state: .playing,
+            currentTime: 10,
+            duration: 100,
+            bufferedTime: 20,
+            networkRate: 1024,
+            hasVideoOutput: true,
+            bufferedRanges: []
+        )))
+        XCTAssertEqual(coordinator.activePlayingFileID, "ep1")
+        XCTAssertEqual(coordinator.committedActiveFileID, "ep1")
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertTrue(coordinator.isEpisodePlaying(fileID: "ep1"))
+        XCTAssertFalse(coordinator.isEpisodePlaying(fileID: "ep2"))
+
+        // 2. Select ep2: triggers resolution
+        _ = coordinator.playFile(ep2, selectionOrdinal: 1, episodeNumber: 2)
+
+        // PHASE A: During resource resolution (network request in-flight)
+        XCTAssertEqual(coordinator.pendingFile?.fileId, "ep2")
+        XCTAssertEqual(coordinator.activePlayingFileID, "ep1")
+        XCTAssertEqual(coordinator.committedActiveFileID, "ep1")
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertTrue(coordinator.isEpisodePlaying(fileID: "ep1"))
+        XCTAssertFalse(coordinator.isEpisodePlaying(fileID: "ep2"), "ep2 must NOT be marked playing while resolving resource")
+        XCTAssertTrue(coordinator.isEpisodePending(fileID: "ep2"))
+        XCTAssertFalse(coordinator.isEpisodePending(fileID: "ep1"))
+
+        // PHASE B: Resource resolution completes, engine loads, before .playing (e.g. .loading or .buffering)
+        let resource2 = PlaybackResource(
+            fileID: "ep2",
+            url: URL(string: "https://example.com/ep2.mp4")!,
+            cookies: [],
+            requiredHTTPHeaders: [:],
+            expiresAt: nil
+        )
+        stubClient.resumeContinuation(for: "ep2", with: .success(resource2))
+        // Yield so resolveAndPlay continuation executes through to engine.load
+        await Task.yield()
+
+        // Engine receives load, emits .loading for the new generation
+        engine.eventHandler?(.stateChanged(PlaybackSnapshot(
+            generation: coordinator.generation,
+            state: .loading,
+            currentTime: 0,
+            duration: 0,
+            bufferedTime: 0,
+            networkRate: 0,
+            hasVideoOutput: false,
+            bufferedRanges: []
+        )))
+
+        // Crucial regression check: after resolution/load, BEFORE .playing:
+        // pendingFile must still be ep2, committed must still be ep1, ep2 is NOT playing!
+        XCTAssertEqual(coordinator.pendingFile?.fileId, "ep2")
+        XCTAssertEqual(coordinator.activePlayingFileID, "ep1")
+        XCTAssertEqual(coordinator.committedActiveFileID, "ep1")
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep1")
+        XCTAssertTrue(coordinator.isEpisodePlaying(fileID: "ep1"))
+        XCTAssertFalse(coordinator.isEpisodePlaying(fileID: "ep2"), "ep2 must NOT be marked playing while loading before .playing")
+        XCTAssertTrue(coordinator.isEpisodePending(fileID: "ep2"))
+
+        // PHASE C: Engine reaches committed playback state (.playing)
+        engine.eventHandler?(.stateChanged(PlaybackSnapshot(
+            generation: coordinator.generation,
+            state: .playing,
+            currentTime: 0,
+            duration: 120,
+            bufferedTime: 5,
+            networkRate: 2048,
+            hasVideoOutput: true,
+            bufferedRanges: []
+        )))
+
+        // Now committed identity has transitioned to ep2!
+        XCTAssertNil(coordinator.pendingFile)
+        XCTAssertEqual(coordinator.activePlayingFileID, "ep2")
+        XCTAssertEqual(coordinator.committedActiveFileID, "ep2")
+        XCTAssertEqual(coordinator.currentPlayingFile.fileId, "ep2")
+        XCTAssertTrue(coordinator.isEpisodePlaying(fileID: "ep2"))
+        XCTAssertFalse(coordinator.isEpisodePlaying(fileID: "ep1"))
+        XCTAssertFalse(coordinator.isEpisodePending(fileID: "ep2"))
+    }
+
+    func testIntroSeekRetryIsBoundedAndAvoidsRepeatedDiagnostics() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quark-coordinator-skip-diag-\(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
+        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
+        let ep1 = CloudFile(fileId: "ep1", parentId: "show", name: "Show.S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let stubClient = EpisodeSwitchStubClient()
+        let engine = StubPlaybackEngine()
+        engine.shouldAcceptSeek = false // Simulate not seekable
+        let coordinator = PlaybackCoordinator(
+            client: stubClient,
+            accountID: "account-1",
+            file: ep1,
+            queue: [ep1],
+            history: history,
+            diagnostics: diagnostics,
+            engine: engine
+        )
+
+        coordinator.setMarkersForTesting(ResolvedEpisodeMarkers(
+            intro: PlaybackSegmentRange(startSeconds: 10, endSeconds: 90),
+            outro: nil
+        ), duration: 1000)
+
+        // Trigger skip intro
+        coordinator.skipIntro()
+        XCTAssertEqual(coordinator.introSkipStatus, .pending(target: 91.0))
+
+        // Wait for bounded retries to finish (max 3 attempts with 300ms sleep = ~900ms)
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+
+        // Must retain visible failure state
+        if case .failed(let msg) = coordinator.introSkipStatus {
+            XCTAssertTrue(msg.contains("重试"))
+        } else {
+            XCTFail("Expected .failed status after bounded retries, got \(coordinator.introSkipStatus)")
+        }
+
+        // Must bound seek attempts to at most 3
+        XCTAssertLessThanOrEqual(engine.seekCallCount, 3)
+
+        // Verify diagnostic logs: only ONE action-level seek log recorded, no diagnostic spam
+        let records = await diagnostics.store.recent()
+        let seekRecords = records.filter { $0.event == .playbackSeek }
+        XCTAssertEqual(seekRecords.count, 1, "Must record only one action-level seek log for skipIntro")
+    }
+
+    func testIntroSkipTargetCalculationPastMarkerEndClampedToDuration() {
+        let target = PlaybackCoordinator.introSkipTarget(
+            introEndSeconds: 85.0,
+            duration: 120.0
+        )
+        // Slightly past marker end (85 + 1.0 = 86.0), clamped to duration
+        XCTAssertEqual(target, 86.0)
+
+        // Clamped to duration
+        let clampedTarget = PlaybackCoordinator.introSkipTarget(
+            introEndSeconds: 119.5,
+            duration: 120.0
+        )
+        XCTAssertEqual(clampedTarget, 120.0)
+    }
+
+    func testIntroSkipPendingStateAndCancellationOnGenerationChange() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quark-coordinator-skip-\(UUID().uuidString)", isDirectory: true)
+        let diagnostics = Diagnostics(store: DiagnosticsStore(directoryURL: root))
+        let history = try HistoryRepository(url: root.appendingPathComponent("history.sqlite"))
+        let ep1 = CloudFile(fileId: "ep1", parentId: "show", name: "Show.S01E01.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let ep2 = CloudFile(fileId: "ep2", parentId: "show", name: "Show.S01E02.mp4", size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+        let stubClient = EpisodeSwitchStubClient()
+        let engine = StubPlaybackEngine()
+        let coordinator = PlaybackCoordinator(client: stubClient, accountID: "account-1", file: ep1, queue: [ep1, ep2], history: history, diagnostics: diagnostics, engine: engine)
+
+        coordinator.setMarkersForTesting(ResolvedEpisodeMarkers(
+            intro: PlaybackSegmentRange(startSeconds: 10, endSeconds: 90),
+            outro: nil
+        ), duration: 1000)
+
+        coordinator.skipIntro()
+        XCTAssertEqual(coordinator.introSkipStatus, .pending(target: 91.0))
+
+        // On generation change / episode switch, pending skip MUST be cancelled and reset to idle
+        coordinator.playFile(ep2)
+        XCTAssertEqual(coordinator.introSkipStatus, .idle)
     }
 
     func testSyncPolicyLeavesUnparsedSeriesInManualConfirmation() {
@@ -723,6 +971,34 @@ final class CodexUpdateTests: XCTestCase {
         ]
         XCTAssertEqual(MediaItemDetailScreen.playbackQueue(for: unknownFile, episodes: episodes).map(\.fileId), ["unknown"])
         XCTAssertEqual(MediaItemDetailScreen.playbackQueue(for: knownFile, episodes: episodes).map(\.fileId), ["known"])
+    }
+
+    @MainActor
+    func testPlaybackQueueIncludesResumeFileWhenNotInCurrentSeason() {
+        func makeEp(season: Int, episode: Int) -> (MediaItem, CloudFile, ParsedMediaName) {
+            let id = "s\(season)e\(episode)"
+            let item = MediaItem(id: id, fileId: id, mediaType: .series, title: "Show", seasonNumber: season, episodeNumber: episode)
+            let file = CloudFile(fileId: id, parentId: "s\(season)", name: String(format: "S%02dE%02d.mp4", season, episode), size: 100, fileExtension: "mp4", modifiedAt: nil, isDirectory: false)
+            let parsed = ParsedMediaName(title: "Show", mediaType: .series, seasonNumber: season, episodeNumber: episode)
+            return (item, file, parsed)
+        }
+
+        let season1Episodes = (1...6).map { makeEp(season: 1, episode: $0) }
+        let season2Episodes = (1...2).map { makeEp(season: 2, episode: $0) }
+        let allEpisodes = season1Episodes + season2Episodes
+
+        let targetE6 = season1Episodes[5].1 // S1E6 file
+        XCTAssertEqual(targetE6.fileId, "s1e6")
+
+        // When currently displayed season is Season 2, but resume target is S1E6 (outside displayed season):
+        let queue = MediaItemDetailScreen.playbackQueue(
+            for: targetE6,
+            episodes: season2Episodes,
+            allEpisodes: allEpisodes
+        )
+        // Queue MUST contain all episodes of Season 1, including target E6, preserving season alignment
+        XCTAssertEqual(queue.map(\.fileId), ["s1e1", "s1e2", "s1e3", "s1e4", "s1e5", "s1e6"])
+        XCTAssertTrue(queue.contains(where: { $0.fileId == targetE6.fileId }), "Target E6 must be present in queue")
     }
 
     func testReducerProjectsNativeDrawerTabFocusToSelectedTab() {
@@ -899,8 +1175,9 @@ final class CodexUpdateTests: XCTestCase {
         )
 
         // Simulate real speed arriving via snapshot
+        let currentGen = coordinator.snapshot.generation
         let snapWithSpeed = PlaybackSnapshot(
-            generation: 1,
+            generation: currentGen,
             state: .playing,
             currentTime: 10,
             duration: 100,
@@ -915,7 +1192,7 @@ final class CodexUpdateTests: XCTestCase {
 
         // Diagnostic event with buffering state MUST NOT clear existing real speed
         let diagSnap = PlaybackDiagnosticSnapshot(
-            generation: 1,
+            generation: currentGen,
             mediaIdentifier: "test",
             state: .buffering,
             hasVideoOutput: true,
@@ -929,7 +1206,7 @@ final class CodexUpdateTests: XCTestCase {
 
         // Zero or non-positive networkRate resets networkSpeedText to avoid displaying stale speed samples
         let snapWithoutSpeed = PlaybackSnapshot(
-            generation: 1,
+            generation: currentGen,
             state: .playing,
             currentTime: 12,
             duration: 100,
@@ -1075,13 +1352,22 @@ private final class StubPlaybackEngine: PlaybackEngine {
     var snapshot: PlaybackSnapshot = .idle()
     var audioTracks: [PlaybackTrack] = []
     var subtitleTracks: [PlaybackTrack] = []
+    var seekCallCount: Int = 0
+    var shouldAcceptSeek: Bool = true
+    var loadedResources: [PlaybackResource] = []
 
     func attachSurface(_ surface: UIView?) {}
-    func load(_ resource: PlaybackResource, generation: Int) {}
+    func load(_ resource: PlaybackResource, generation: Int) {
+        loadedResources.append(resource)
+    }
     func play() {}
     func pause() {}
     func stop() {}
-    func seek(to seconds: TimeInterval) {}
+    @discardableResult
+    func seek(to seconds: TimeInterval) -> Bool {
+        seekCallCount += 1
+        return shouldAcceptSeek
+    }
     func selectAudioTrack(id: Int?) {}
     func selectSubtitleTrack(id: Int?) {}
 }

@@ -257,7 +257,14 @@ final class PlayerRemoteInteractionTests: XCTestCase {
             "Closing the drawer must restore focus to the (still-mounted) drawer trigger"
         )
 
-        // Subsequently pressing Menu separately dismisses the player overlay presentation.
+        // A trailing/rapid duplicate from the same close action must not
+        // dismiss the player. A deliberate second Back after the guard should.
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(
+            waitUntil(2) { self.app.buttons["player.drawerTrigger"].exists && self.timeText.exists },
+            "A rapid trailing Back after closing the drawer must not dismiss the player"
+        )
+        Thread.sleep(forTimeInterval: 3.1)
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(
             waitUntil(5) { !self.app.buttons["player.drawerTrigger"].exists && !self.timeText.exists },
@@ -268,4 +275,5 @@ final class PlayerRemoteInteractionTests: XCTestCase {
             "Underlying home marker must become visible after player presentation is dismissed"
         )
     }
+
 }

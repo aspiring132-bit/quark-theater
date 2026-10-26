@@ -16,7 +16,15 @@ protocol PlaybackEngine: AnyObject {
     func play()
     func pause()
     func stop()
-    func seek(to seconds: TimeInterval)
+    @discardableResult
+    func seek(to seconds: TimeInterval) -> Bool
     func selectAudioTrack(id: Int?)
     func selectSubtitleTrack(id: Int?)
+}
+
+extension PlaybackEngine {
+    @discardableResult
+    func seek(to seconds: TimeInterval) -> Bool {
+        return true
+    }
 }

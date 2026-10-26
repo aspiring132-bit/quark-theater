@@ -3,11 +3,10 @@ import SwiftUI
 
 // MARK: - UI Test Launch Seam (--uitest-player)
 //
-// This file implements the deterministic player entry point used by
-// QuarkTheaterUITests. It is only reached when the app is launched with the
-// `--uitest-player` argument; the normal production launch path is unchanged.
-// The fixture never contacts Quark, TMDB, or any network endpoint: playback
-// resolves to a locally generated black video file.
+// This file implements the deterministic player harness used by
+// QuarkTheaterUITests and the dedicated Canvas drawer preview. The fixture
+// never contacts Quark, TMDB, or any network endpoint; UI tests use a locally
+// generated black video file, while Canvas uses a static player surface.
 
 /// Deterministic playback client for UI tests. Only `playbackResource` and
 /// `restoreSession` are implemented; every other entry point throws
@@ -34,7 +33,6 @@ final class UITestPlaybackClient: QuarkClient {
 
     func logout() async throws {}
 }
-
 /// Generates a tiny local H.264 clip once per install so VLC has a real,
 /// fully offline media source. Every frame is a keyframe
 /// (`maxKeyFrameInterval = 1`) so seek targets land exactly where the reducer
@@ -133,7 +131,6 @@ actor UITestVideoFactory {
         return finalURL
     }
 }
-
 /// Polls the real `PlaybackCoordinator` and publishes observable playback
 /// state for the test overlay. Read-only: it never drives the player.
 @MainActor
@@ -167,19 +164,25 @@ final class UITestPlayerProbe: ObservableObject {
 /// The UI-test entry view: the real `PlayerScreen` with a deterministic
 /// three-episode queue, plus a small non-interactive state readout. The
 /// overlay only reports state; assertions about focus and actions run against
-/// the production controls via their accessibility identifiers.
+/// the production controls via their accessibility identifiers. Canvas mode
+/// opens the real drawer over a static background without starting playback.
 @MainActor
 struct PlayerUITestHarness: View {
     @StateObject private var probe = UITestPlayerProbe()
     @State private var isPlayerPresented = true
 
-    private let client = UITestPlaybackClient()
+    private let client: UITestPlaybackClient
+    private let showsProbe: Bool
+    private let isCanvasPreview: Bool
     private let history: HistoryRepository
     private let diagnostics = Diagnostics()
     private let files: [CloudFile]
     private let metadataByFileID: [String: ParsedMediaName]
 
-    init() {
+    init(showsProbe: Bool = true, isCanvasPreview: Bool = false) {
+        self.showsProbe = showsProbe
+        self.isCanvasPreview = isCanvasPreview
+        self.client = UITestPlaybackClient()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("quarktheater-uitest-history-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -215,27 +218,30 @@ struct PlayerUITestHarness: View {
                         history: history,
                         diagnostics: diagnostics,
                         episodeMetadataByFileID: metadataByFileID,
+                        isCanvasPreview: isCanvasPreview,
                         onRequestDismiss: {
                             isPlayerPresented = false
                         },
                         coordinatorObserver: { coordinator in probe.attach(coordinator) }
                     )
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(probe.playState)
-                            .accessibilityIdentifier("player.playPauseState")
-                        Text(probe.timeText)
-                            .accessibilityIdentifier("player.timeText")
-                        Text(probe.durationText)
-                            .accessibilityIdentifier("player.durationText")
+                    if showsProbe {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(probe.playState)
+                                .accessibilityIdentifier("player.playPauseState")
+                            Text(probe.timeText)
+                                .accessibilityIdentifier("player.timeText")
+                            Text(probe.durationText)
+                                .accessibilityIdentifier("player.durationText")
+                        }
+                        .font(.system(size: 16, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .padding(8)
+                        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+                        .padding(.top, 28)
+                        .padding(.leading, 44)
+                        .allowsHitTesting(false)
                     }
-                    .font(.system(size: 16, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .padding(8)
-                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
-                    .padding(.top, 28)
-                    .padding(.leading, 44)
-                    .allowsHitTesting(false)
                 }
                 .transition(.identity)
             }

@@ -7,6 +7,13 @@ enum PlaybackReplacementAction: Equatable {
     case pauseAndPlay
     case startNormally
 }
+
+enum IntroSkipStatus: Equatable {
+    case idle
+    case pending(target: Double)
+    case failed(message: String)
+}
+
 @MainActor
 final class PlaybackCoordinator: ObservableObject {
     @Published private(set) var isPlaying: Bool = false
@@ -25,10 +32,15 @@ final class PlaybackCoordinator: ObservableObject {
     @Published private(set) var activePlayingFileID: String?
     @Published private(set) var currentEpisodeMarkers: ResolvedEpisodeMarkers = .empty
     @Published private(set) var snapshot: PlaybackSnapshot = .idle()
+    @Published private(set) var introSkipStatus: IntroSkipStatus = .idle
 
     private let client: QuarkClient
     private let accountID: String
-    private var currentFile: CloudFile
+    @Published private(set) var committedActiveFile: CloudFile
+    private var currentFile: CloudFile {
+        get { committedActiveFile }
+        set { committedActiveFile = newValue }
+    }
     private let queue: [CloudFile]
     private let automaticallyPlayNext: Bool
     private let history: HistoryRepository
@@ -41,13 +53,14 @@ final class PlaybackCoordinator: ObservableObject {
     private var retriesUsed = 0
     private var restoredPosition: Double = 0
     private var pendingRestoration: (generation: Int, position: Double)?
-    private var generation = 0
+    private(set) var generation = 0
     private var playbackCorrelationID: DiagnosticCorrelationID?
     private var startedPlaybackGeneration: Int?
     private var audioRouteObserver: NSObjectProtocol?
     private var silentMarkerFollowUpTask: Task<Void, Never>?
     private var markerResolutionTask: Task<Void, Never>?
     private var markerResolutionTriggeredGeneration: Int?
+    private var introSkipTask: Task<Void, Never>?
     private var snapshotPollTask: Task<Void, Never>?
     private var activeResource: PlaybackResource?
     private var bufferingPolicy = PlaybackBufferingPolicy()
@@ -130,7 +143,21 @@ final class PlaybackCoordinator: ObservableObject {
         activeResource != nil && engine.snapshot.state != .idle
     }
 
-    var currentPlayingFile: CloudFile { currentFile }
+    var currentPlayingFile: CloudFile { committedActiveFile }
+    var committedActiveFileID: String { activePlayingFileID ?? committedActiveFile.fileId }
+
+    func isEpisodePlaying(fileID: String) -> Bool {
+        fileID == committedActiveFileID && fileID != pendingFile?.fileId
+    }
+
+    func isEpisodePending(fileID: String) -> Bool {
+        fileID == pendingFile?.fileId
+    }
+
+    static func introSkipTarget(introEndSeconds: Double, duration: Double) -> Double {
+        max(0, min(introEndSeconds + 1.0, duration))
+    }
+
     var playlistQueue: [CloudFile] { queue }
     var playbackCorrelation: DiagnosticCorrelationID? { playbackCorrelationID }
     private(set) var lastRequestedPlaybackFileID: String?
@@ -180,7 +207,7 @@ final class PlaybackCoordinator: ObservableObject {
          engine: PlaybackEngine? = nil) {
         self.client = client
         self.accountID = accountID
-        self.currentFile = file
+        self.committedActiveFile = file
         self.queue = queue.isEmpty ? [file] : queue
         self.automaticallyPlayNext = automaticallyPlayNext
         self.history = history
@@ -260,6 +287,9 @@ final class PlaybackCoordinator: ObservableObject {
         markerResolutionTask?.cancel()
         markerResolutionTask = nil
         markerResolutionTriggeredGeneration = nil
+        introSkipTask?.cancel()
+        introSkipTask = nil
+        introSkipStatus = .idle
         currentEpisodeMarkers = .empty
         activeResource = nil
         engine.stop()
@@ -303,6 +333,9 @@ final class PlaybackCoordinator: ObservableObject {
             markerResolutionTask = nil
             currentEpisodeMarkers = .empty
             markerResolutionTriggeredGeneration = nil
+            introSkipTask?.cancel()
+            introSkipTask = nil
+            introSkipStatus = .idle
         }
         if Self.shouldPausePlayerBeforeReplacement(hasActivePlayer: hasActivePlayer, isNewFile: isNewFile) {
             engine.pause()
@@ -431,17 +464,94 @@ final class PlaybackCoordinator: ObservableObject {
         )
     }
 
-    func seek(to seconds: Double) {
+    @discardableResult
+    func seek(to seconds: Double, recordDiagnostics: Bool = true) -> Bool {
         bufferingPolicyState = PlaybackBufferingPolicy.State.reset(for: generation)
         let duration = playbackDuration
         let target = max(0, duration > 0 ? min(seconds, duration) : seconds)
-        engine.seek(to: target)
+        let accepted = engine.seek(to: target)
+        if recordDiagnostics {
+            diagnostics.record(
+                category: .playback,
+                level: .debug,
+                event: .playbackSeek,
+                correlationID: playbackCorrelationID,
+                metadata: [.playbackTimeSeconds(target), .playerEngine(.vlcPlayer)]
+            )
+        }
+        return accepted
+    }
+
+    @discardableResult
+    func skipIntro() -> Bool {
+        guard let intro = currentEpisodeMarkers.intro, playbackDuration > 0 else { return false }
+        if case .pending = introSkipStatus { return false }
+        let duration = playbackDuration
+        let target = Self.introSkipTarget(introEndSeconds: intro.endSeconds, duration: duration)
+
+        introSkipTask?.cancel()
+        introSkipStatus = .pending(target: target)
+
+        // Single action-level diagnostic log for the user action
         diagnostics.record(
             category: .playback,
-            level: .debug,
+            level: .info,
             event: .playbackSeek,
             correlationID: playbackCorrelationID,
             metadata: [.playbackTimeSeconds(target), .playerEngine(.vlcPlayer)]
+        )
+
+        let initialAccepted = seek(to: target, recordDiagnostics: false)
+        let expectedGeneration = generation
+
+        introSkipTask = Task { @MainActor [weak self] in
+            let maxAttempts = 3
+            var attempt = 1
+            var accepted = initialAccepted
+            while !accepted && attempt < maxAttempts {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard let self, self.generation == expectedGeneration, !Task.isCancelled else { return }
+                attempt += 1
+                accepted = self.seek(to: target, recordDiagnostics: false)
+            }
+
+            if !accepted {
+                guard let self, self.generation == expectedGeneration, !Task.isCancelled else { return }
+                self.introSkipStatus = .failed(message: "跳过失败，点击重试")
+                return
+            }
+
+            let pollDeadline = Date().addingTimeInterval(2.5)
+            while Date() < pollDeadline {
+                guard let self, self.generation == expectedGeneration, !Task.isCancelled else { return }
+                if self.playbackTime >= min(intro.endSeconds, self.playbackDuration) {
+                    self.introSkipStatus = .idle
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+
+            guard let self, self.generation == expectedGeneration, !Task.isCancelled else { return }
+            if self.playbackTime < min(intro.endSeconds, self.playbackDuration) {
+                self.introSkipStatus = .failed(message: "跳过超时，点击重试")
+            } else {
+                self.introSkipStatus = .idle
+            }
+        }
+        return true
+    }
+
+    func setMarkersForTesting(_ markers: ResolvedEpisodeMarkers, duration: Double) {
+        currentEpisodeMarkers = markers
+        snapshot = PlaybackSnapshot(
+            generation: generation,
+            state: .playing,
+            currentTime: snapshot.currentTime,
+            duration: duration,
+            bufferedTime: snapshot.bufferedTime,
+            networkRate: snapshot.networkRate,
+            hasVideoOutput: snapshot.hasVideoOutput,
+            bufferedRanges: snapshot.bufferedRanges
         )
     }
 
@@ -583,8 +693,6 @@ final class PlaybackCoordinator: ObservableObject {
             expiresAt: resource.expiresAt
         )
 
-        currentFile = requestedFile
-        pendingFile = nil
         activeResource = resolvedResource
         audioTracks = []
         subtitleTracks = []
@@ -712,13 +820,17 @@ final class PlaybackCoordinator: ObservableObject {
         case .playing:
             isPlaying = true
             isBuffering = false
-            activePlayingFileID = currentFile.fileId
+            if let pending = pendingFile {
+                committedActiveFile = pending
+                pendingFile = nil
+            }
+            activePlayingFileID = committedActiveFile.fileId
             isCurrentPlaybackStarted = true
             isPlaybackTransitionActive = false
             startSnapshotPolling()
             if snapshot.duration > 0 && markerResolutionTriggeredGeneration != generation {
                 markerResolutionTriggeredGeneration = generation
-                triggerMarkerResolution(fileID: currentFile.fileId, generation: generation, duration: snapshot.duration)
+                triggerMarkerResolution(fileID: committedActiveFile.fileId, generation: generation, duration: snapshot.duration)
             }
         case .buffering:
             isPlaying = true

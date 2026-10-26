@@ -233,5 +233,12 @@ final class VLCPlaybackControllerTests: XCTestCase {
         XCTAssertEqual(snapshot.bufferedTime, 30)
         XCTAssertEqual(snapshot.bufferedRanges, [])
     }
+
+    func testSeekReturnsFalseWhenNotSeekable() {
+        let controller = VLCPlaybackController()
+        XCTAssertFalse(controller.isSeekable)
+        let accepted: Bool = controller.seek(to: 10)
+        XCTAssertFalse(accepted)
+    }
 }
 #endif

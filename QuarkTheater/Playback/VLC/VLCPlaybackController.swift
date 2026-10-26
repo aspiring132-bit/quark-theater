@@ -138,14 +138,6 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
         updateSnapshot(state: .loading, time: 0, duration: 0, buffered: 0, networkRate: 0, hasVideoOutput: false)
         emit(.stateChanged(snapshot))
 
-        diagnostics?.record(
-            category: .playback,
-            level: .info,
-            event: .started,
-            correlationID: correlationID,
-            metadata: [.playerEngine(.vlcPlayer), .switchGeneration(generation)]
-        )
-
         do {
             let plan = VLCPlaybackPlanning.plan(resource: resource)
             if plan.requiresOriginProxy {
@@ -216,8 +208,9 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
         emit(.stateChanged(snapshot))
     }
 
-    func seek(to seconds: TimeInterval) {
-        guard let player, player.isSeekable else { return }
+    @discardableResult
+    func seek(to seconds: TimeInterval) -> Bool {
+        guard let player, player.isSeekable else { return false }
         let duration = snapshot.duration
         let target = max(0, duration > 0 ? min(seconds, duration) : seconds)
         let targetMs = min(Int64((target * 1000).rounded()), Int64(Int32.max))
@@ -230,6 +223,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
             metadata: [.playerEngine(.vlcPlayer), .playbackTimeSeconds(target)]
         )
         pollSnapshot()
+        return true
     }
 
     func selectAudioTrack(id: Int?) {
@@ -264,7 +258,8 @@ final class VLCPlaybackController: NSObject, ObservableObject, PlaybackEngine {
         }
     }
 
-    func seek(deltaSeconds: Double) {
+    @discardableResult
+    func seek(deltaSeconds: Double) -> Bool {
         seek(to: snapshot.currentTime + deltaSeconds)
     }
 

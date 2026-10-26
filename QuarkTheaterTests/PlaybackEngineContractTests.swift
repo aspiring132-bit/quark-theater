@@ -267,7 +267,7 @@ final class PlaybackEngineContractTests: XCTestCase {
 
     func testCoordinatorMapsNonFirstActiveTracksByStableIDs() async throws {
         let file = Self.file(id: "episode-tracks")
-        let engine = TrackReportingFakeEngine()
+        let engine = TrackReportingFakeEngine(selectedAudioID: 30, selectedSubtitleID: 12)
         let client = ContractFakeClient(resource: PlaybackResource(
             fileID: file.fileId, url: URL(string: "https://example.com/tracks.mp4")!,
             cookies: [], requiredHTTPHeaders: [:], expiresAt: nil
@@ -352,7 +352,11 @@ private final class ContractFakeEngine: PlaybackEngine {
     func play() { commands.append(.play) }
     func pause() { commands.append(.pause) }
     func stop() {}
-    func seek(to seconds: TimeInterval) { commands.append(.seek(seconds)) }
+    @discardableResult
+    func seek(to seconds: TimeInterval) -> Bool {
+        commands.append(.seek(seconds))
+        return true
+    }
     func selectAudioTrack(id: Int?) { selectedAudioID = id }
     func selectSubtitleTrack(id: Int?) { selectedSubtitleID = id }
 }
@@ -382,7 +386,11 @@ private final class DeferredFakeEngine: PlaybackEngine {
     func play() {}
     func pause() {}
     func stop() {}
-    func seek(to seconds: TimeInterval) { seekCommands.append(seconds) }
+    @discardableResult
+    func seek(to seconds: TimeInterval) -> Bool {
+        seekCommands.append(seconds)
+        return true
+    }
     func selectAudioTrack(id: Int?) {}
     func selectSubtitleTrack(id: Int?) {}
 }
